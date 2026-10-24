@@ -13,18 +13,11 @@ void C_MTX44Concat(const Mtx44 a, const Mtx44 b, Mtx44 ab);
 void C_MTX44Transpose(const Mtx44 src, Mtx44 xPose);
 u32 C_MTX44Inverse(const Mtx44 src, Mtx44 inv);
 
-#ifdef GEKKO
-void PSMTX44Identity(Mtx44 m);
-void PSMTX44Copy(const Mtx44 src, Mtx44 dst);
-void PSMTX44Concat(const Mtx44 a, const Mtx44 b, Mtx44 ab);
-void PSMTX44Transpose(const Mtx44 src, Mtx44 xPose);
-#endif
-
 #ifdef MTX_USE_PS
-#define MTX44Identity PSMTX44Identity
-#define MTX44Copy PSMTX44Copy
-#define MTX44Concat PSMTX44Concat
-#define MTX44Transpose PSMTX44Transpose
+#define MTX44Identity C_MTX44Identity
+#define MTX44Copy C_MTX44Copy
+#define MTX44Concat C_MTX44Concat
+#define MTX44Transpose C_MTX44Transpose
 #else
 #define MTX44Identity C_MTX44Identity
 #define MTX44Copy C_MTX44Copy
