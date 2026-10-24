@@ -15,3 +15,12 @@ set_target_properties(aurora_os PROPERTIES FOLDER "aurora")
 
 target_include_directories(aurora_os PUBLIC include)
 target_link_libraries(aurora_os PRIVATE aurora::core)
+
+if (AURORA_OS_THREADS)
+    target_compile_definitions(aurora_os PUBLIC AURORA_OS_THREADS=1)
+    target_sources(aurora_os PRIVATE
+            lib/dolphin/os/os_threads/OSMessage.cpp
+            lib/dolphin/os/os_threads/OSMutex.cpp
+            lib/dolphin/os/os_threads/OSThread.cpp
+            lib/dolphin/os/os_threads/OSThreadShutdown.cpp)
+endif ()
