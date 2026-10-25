@@ -18,7 +18,7 @@ static BOOL AR_init_flag;
 static u8* sAramBuffer = nullptr;
 
 // Convert an ARAM "address" (offset) to a real host pointer
-static u8* aramToHost(u32 aramAddr) {
+static u8* aramToHost(uintptr_t aramAddr) {
   if (!sAramBuffer || aramAddr >= aurora::g_config.mem2Size) {
     return nullptr;
   }
@@ -114,4 +114,12 @@ void ARQInit() {
 
 void* ARGetStorageAddress() {
   return sAramBuffer;
+}
+
+void ARStartDMA(u32 type, uintptr_t mainmem_addr, uintptr_t aram_addr, u32 length) {
+  if (type == ARAM_DIR_MRAM_TO_ARAM) {
+    std::memcpy(aramToHost(aram_addr), reinterpret_cast<void const*>(mainmem_addr), length);
+  } else {
+    std::memcpy(reinterpret_cast<void*>(mainmem_addr), aramToHost(aram_addr), length);
+  }
 }

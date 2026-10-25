@@ -20,7 +20,7 @@ typedef void (*ARCallback)(void);
 
 ARCallback ARRegisterDMACallback(ARCallback callback);
 u32 ARGetDMAStatus(void);
-void ARStartDMA(u32 type, u32 mainmem_addr, u32 aram_addr, u32 length);
+void ARStartDMA(u32 type, uintptr_t mainmem_addr, uintptr_t aram_addr, u32 length);
 u32 ARAlloc(u32 length);
 u32 ARFree(u32* length);
 BOOL ARCheckInit(void);
