@@ -57,7 +57,7 @@ enum {
 };
 
 typedef struct NANDFileInfo {
-    uintptr_t internal[2];
+    uintptr_t internal[2]{};
 } NANDFileInfo;
 
 typedef struct NANDStatus {
