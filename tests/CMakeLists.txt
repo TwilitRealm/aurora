@@ -31,6 +31,7 @@ gtest_discover_tests(io_tests)
 add_executable(input_tests
   input_binding_test.cpp
   input_router_test.cpp
+  text_input_test.cpp
   ../lib/input/binding.cpp
   ../lib/input/names.cpp
   ../lib/input/capture.cpp
@@ -87,6 +88,15 @@ target_include_directories(os_time_tests PRIVATE
 target_compile_definitions(os_time_tests PRIVATE AURORA TARGET_PC=1)
 target_link_libraries(os_time_tests PRIVATE fmt::fmt gtest gtest_main)
 gtest_discover_tests(os_time_tests)
+
+add_executable(os_utf_tests
+  os_utf_test.cpp
+  ../lib/dolphin/os/OSUtf.cpp
+)
+target_include_directories(os_utf_tests PRIVATE ../include)
+target_compile_definitions(os_utf_tests PRIVATE AURORA TARGET_PC=1)
+target_link_libraries(os_utf_tests PRIVATE gtest gtest_main)
+gtest_discover_tests(os_utf_tests)
 
 if (AURORA_ENABLE_GX)
   # GX FIFO round-trip tests
@@ -321,4 +331,15 @@ if (AURORA_ENABLE_GX)
       target_link_libraries(${input_test_target} PRIVATE $<LINK_GROUP:RESCAN,aurora::gx,aurora::vi,aurora::core,PNG::PNG>)
     endif ()
   endforeach ()
+endif ()
+
+if (AURORA_ENABLE_GX)
+  add_executable(imgui_input_tests imgui_input_test.cpp)
+  target_include_directories(imgui_input_tests PRIVATE ../include ../lib)
+  target_link_libraries(imgui_input_tests PRIVATE aurora::gx aurora::vi gtest gtest_main)
+  if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(imgui_input_tests PRIVATE $<LINK_GROUP:RESCAN,aurora::gx,aurora::vi,aurora::core>)
+  endif ()
+  aurora_copy_runtime_dlls(imgui_input_tests)
+  gtest_discover_tests(imgui_input_tests)
 endif ()
