@@ -127,6 +127,17 @@ extern "C" {
  */
 #define GX_AURORA_READBACK_CAPTURE_COPIES 0x0051
 
+/**
+ * Clears a subrectangle of the current EFB.
+ *
+ * Command format:
+ *   u8 bits (0x01 = color, 0x02 = alpha, 0x04 = depth)
+ *   u32 x, y, w, h; // subrect (in framebuffer coordinates)
+ *   u8 r, g, b, a; // clear color
+ *   f32 clearDepth;
+ */
+#define GX_AURORA_CLEAR_SUBRECT 0x0052
+
 #define GX2_SET_POLYGON_OFFSET 0x1000
 
 /*
@@ -209,6 +220,9 @@ void GXCreateFrameBuffer(u32 width, u32 height);
  * Must be called after GXCreateFrameBuffer() to resume normal rendering.
  */
 void GXRestoreFrameBuffer(void);
+
+typedef struct _GXColor GXColor;
+void GXClearSubrect(bool color, bool alpha, bool depth, GXColor colorValue, f32 depthValue, s32 x, s32 y, s32 w, s32 h);
 
 /*
  * Asynchronous readback APIs

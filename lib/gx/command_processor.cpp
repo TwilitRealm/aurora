@@ -10,6 +10,7 @@
 #include "regs.hpp"
 #include "shader_info.hpp"
 #include "texture.hpp"
+#include "../gfx/clear.hpp"
 
 #include <tracy/Tracy.hpp>
 
@@ -767,6 +768,28 @@ void handle_aurora(ByteReader& reader) noexcept {
   } else if (subCmd == GX_AURORA_DEBUG_MARKER_INSERT) {
     auto label = reader.read_string();
     gfx::insert_debug_marker(std::move(label));
+  } else if (subCmd == GX_AURORA_CLEAR_SUBRECT) {
+    auto bits = reader.read<u8>();
+    auto drawClearColor = !!(bits & 0x01), drawClearAlpha = !!(bits & 0x02), drawClearDepth = !!(bits & 0x04);
+    auto x = reader.read<s32>(), y = reader.read<s32>(), w = reader.read<s32>(), h = reader.read<s32>();
+    auto r = reader.read<u8>(), g = reader.read<u8>(), b = reader.read<u8>(), a = reader.read<u8>();
+    auto clearDepthValue = reader.read<f32>();
+    gfx::push_draw_command(aurora::gfx::clear::DrawData{
+        .pipeline = aurora::gfx::clear::pipeline_ref(aurora::gfx::clear::PipelineConfig{
+            .clearColor = drawClearColor,
+            .clearAlpha = drawClearAlpha,
+            .clearDepth = drawClearDepth,
+        }),
+        .color =
+            wgpu::Color{
+                .r = (r / 255.0),
+                .g = (g / 255.0),
+                .b = (b / 255.0),
+                .a = (a / 255.0),
+            },
+        .depth = clearDepthValue,
+        .rect = { .x = x, .y = y, .width = w, .height = h },
+    });
   }
 
   else {

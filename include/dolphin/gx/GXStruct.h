@@ -55,7 +55,7 @@ typedef struct {
   u8 vfilter[7];
 } GXRenderModeObj;
 
-typedef struct {
+typedef struct _GXColor {
   u8 r;
   u8 g;
   u8 b;

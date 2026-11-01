@@ -103,6 +103,21 @@ void GXRestoreFrameBuffer() {
   aurora::gx::fifo::publish();
 }
 
+void GXClearSubrect(bool color, bool alpha, bool depth, GXColor colorValue, f32 depthValue, s32 x, s32 y, s32 w, s32 h) {
+  GX_WRITE_AURORA(GX_AURORA_CLEAR_SUBRECT);
+  auto fb_rect = aurora::gx::map_logical_scissor(aurora::gfx::ClipRect{x, y, w, h});
+  GX_WRITE_U8((color ? 0x01 : 0) | (alpha ? 0x02 : 0) | (depth ? 0x04 : 0));
+  GX_WRITE_U32(fb_rect.x);
+  GX_WRITE_U32(fb_rect.y);
+  GX_WRITE_U32(fb_rect.width);
+  GX_WRITE_U32(fb_rect.height);
+  GX_WRITE_U8(colorValue.r);
+  GX_WRITE_U8(colorValue.g);
+  GX_WRITE_U8(colorValue.b);
+  GX_WRITE_U8(colorValue.a);
+  GX_WRITE_F32(depthValue);
+}
+
 AuroraReadbackStream AuroraReadbackCreateStream() { return aurora::gfx::readback::create_stream(); }
 
 void AuroraReadbackDestroyStream(AuroraReadbackStream stream) { aurora::gfx::readback::destroy_stream(stream); }
