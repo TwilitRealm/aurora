@@ -356,11 +356,11 @@ T& inline_payload(void* ptr) noexcept {
 }
 
 template <auto Renderer, InlinePayload T>
-void encode_draw(void* payload, const wgpu::RenderPassEncoder& pass, const RenderPass& passInfo) {
+void encode_draw(void* payload, const wgpu::RenderPassEncoder& pass, const RenderPass& passInfo, const DrawEncodeContext &ctx) {
   const T& data = inline_payload<T>(payload);
   if constexpr (std::is_invocable_v<decltype(Renderer), const T&, const wgpu::RenderPassEncoder&,
-                                    const wgpu::Extent3D&>) {
-    Renderer(data, pass, passInfo.colorAttachments[SceneColorAttachmentIndex].size);
+                                    const wgpu::Extent3D&, const DrawEncodeContext&>) {
+    Renderer(data, pass, passInfo.colorAttachments[SceneColorAttachmentIndex].size, ctx);
   } else {
     static_assert(std::is_invocable_v<decltype(Renderer), const T&, const wgpu::RenderPassEncoder&>);
     Renderer(data, pass);

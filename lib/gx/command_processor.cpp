@@ -775,7 +775,7 @@ void handle_aurora(ByteReader& reader) noexcept {
     auto r = reader.read<u8>(), g = reader.read<u8>(), b = reader.read<u8>(), a = reader.read<u8>();
     auto clearDepthValue = reader.read<f32>();
     gfx::push_draw_command(aurora::gfx::clear::DrawData{
-        .pipeline = aurora::gfx::clear::pipeline_ref(aurora::gfx::clear::PipelineConfig{
+        .pipeline = aurora::gfx::pipeline_ref(aurora::gfx::clear::PipelineConfig{
             .clearColor = drawClearColor,
             .clearAlpha = drawClearAlpha,
             .clearDepth = drawClearDepth,

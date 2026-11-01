@@ -8,6 +8,10 @@
 
 #include <webgpu/webgpu_cpp.h>
 
+namespace aurora::gfx {
+  struct DrawEncodeContext;
+}
+
 namespace aurora::gfx::clear {
 struct DrawData {
   PipelineRef pipeline;
@@ -27,5 +31,6 @@ struct PipelineConfig {
 static_assert(std::has_unique_object_representations_v<PipelineConfig>);
 
 wgpu::RenderPipeline create_pipeline(const PipelineConfig& config, const RenderTargetLayout& layout);
-void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, const wgpu::Extent3D& targetSize);
+void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, const wgpu::Extent3D& targetSize,
+            const aurora::gfx::DrawEncodeContext& ctx);
 } // namespace aurora::gfx::clear

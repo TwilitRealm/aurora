@@ -111,10 +111,7 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
 #ifdef AURORA_GFX_DEBUG_GROUPS
   std::vector<std::string> lastDebugGroupStack;
 #endif
-  Viewport currentViewport{};
-  ClipRect currentScissor{};
-  bool hasViewport = false;
-  bool hasScissor = false;
+  DrawEncodeContext ctx;
 
   // Bind bind group for the whole pass
   pass.SetBindGroup(0, resources().staticBindGroup);
@@ -143,19 +140,19 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
     case CommandType::SetViewport: {
       const auto& vp = cmd.data.setViewport;
       apply_viewport(pass, vp);
-      currentViewport = vp;
-      hasViewport = true;
+      ctx.currentViewport = vp;
+      ctx.hasViewport = true;
     } break;
     case CommandType::SetScissor: {
       const auto& sc = cmd.data.setScissor;
       apply_scissor(pass, sc, passInfo.colorAttachments[SceneColorAttachmentIndex].size);
-      currentScissor = sc;
-      hasScissor = true;
+      ctx.currentScissor = sc;
+      ctx.hasScissor = true;
     } break;
     case CommandType::Draw: {
       auto& draw = cmd.data.draw;
       if (draw.encoder != nullptr) {
-        draw.encoder(draw.payload.data(), pass, passInfo);
+        draw.encoder(draw.payload.data(), pass, passInfo, ctx);
       }
     } break;
     case CommandType::CustomDraw: {
@@ -163,12 +160,8 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
       g_currentPipeline = nullptr;
       pass.SetBindGroup(0, resources().staticBindGroup);
       pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
-      if (hasViewport) {
-        apply_viewport(pass, currentViewport);
-      }
-      if (hasScissor) {
-        apply_scissor(pass, currentScissor, passInfo.colorAttachments[SceneColorAttachmentIndex].size);
-      }
+      apply_viewport(pass, ctx);
+      apply_scissor(pass, ctx, passInfo.colorAttachments[SceneColorAttachmentIndex].size);
     } break;
     case CommandType::DebugMarker: {
 #if defined(AURORA_GFX_DEBUG_GROUPS)
@@ -448,4 +441,15 @@ bool bind_pipeline(PipelineRef ref, const wgpu::RenderPassEncoder& pass) {
   bind_pipeline(pipeline.main, pass);
   return true;
 }
+
+void apply_viewport(const wgpu::RenderPassEncoder& pass, const DrawEncodeContext& ctx) {
+  if (ctx.hasViewport)
+    apply_viewport(pass, ctx.currentViewport);
+}
+
+void apply_scissor(const wgpu::RenderPassEncoder& pass, const DrawEncodeContext& ctx, const wgpu::Extent3D& size) {
+  if (ctx.hasScissor)
+    apply_scissor(pass, ctx.currentScissor, size);
+}
+
 } // namespace aurora::gfx

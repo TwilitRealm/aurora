@@ -18,6 +18,10 @@ namespace aurora::gfx::readback {
 struct Job;
 }
 
+namespace aurora::gfx {
+struct DrawEncodeContext;
+}
+
 namespace aurora::gfx::detail {
 
 struct StagingHighWater {
@@ -36,7 +40,7 @@ struct CustomDrawCommand {
 };
 
 struct RenderPass;
-using DrawEncoder = void (*)(void* payload, const wgpu::RenderPassEncoder& pass, const RenderPass& passInfo);
+using DrawEncoder = void (*)(void* payload, const wgpu::RenderPassEncoder& pass, const RenderPass& passInfo, const aurora::gfx::DrawEncodeContext& ctx);
 
 struct DrawCommand {
   DrawEncoder encoder = nullptr;

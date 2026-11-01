@@ -138,7 +138,7 @@ wgpu::RenderPipeline create_pipeline(const PipelineConfig& config, const RenderT
   return g_device.CreateRenderPipeline(&pipelineDescriptor);
 }
 
-void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, const wgpu::Extent3D& targetSize) {
+void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, const wgpu::Extent3D& targetSize, const aurora::gfx::DrawEncodeContext & ctx) {
   if (!bind_pipeline(data.pipeline, pass)) {
     return;
   }
@@ -148,5 +148,7 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, const wgp
                    data.depth);
   pass.SetScissorRect(data.rect.x, data.rect.y, data.rect.width, data.rect.height);
   pass.Draw(3);
+  apply_viewport(pass, ctx);
+  apply_scissor(pass, ctx, targetSize);
 }
 } // namespace aurora::gfx::clear
