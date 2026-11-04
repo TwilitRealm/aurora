@@ -351,6 +351,7 @@ if (AURORA_ENABLE_HEAP AND NOT TARGET mimalloc-static)
   set(MI_BUILD_TESTS OFF CACHE BOOL "Build test executables" FORCE)
   # Debug builds keep mimalloc's padding (overflow and double free checks); release has none, so mi_expand works
   set(MI_PADDING OFF CACHE BOOL "Enable padding to detect heap block overflow" FORCE)
+  set(MI_PROFILE OFF CACHE STRING "Enable profiling" FORCE)
   if (NOT CMAKE_CONFIGURATION_TYPES)
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
       set(MI_DEBUG ON CACHE STRING "Enable assertion checks" FORCE)
