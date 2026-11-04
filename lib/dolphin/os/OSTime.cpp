@@ -83,14 +83,7 @@ OSTime OSGetTime() {
 
 OSTime OSGetNativeTime() { return duration_to_ticks(aurora::time::native_clock::now().time_since_epoch()); }
 
-void AuroraInitClock() {
-  std::call_once(s_gameEpochOnce, initialize_game_epoch);
-  if (OSBaseAddress == 0) {
-    return;
-  }
-
-  __OSBusClock = OS_TIMER_CLOCK * OS_TIMER_CLOCK_DIVIDER;
-}
+void AuroraInitClock() { std::call_once(s_gameEpochOnce, initialize_game_epoch); }
 
 void OSTicksToCalendarTime(OSTime ticks, OSCalendarTime* td) {
   const LocalTime local = kGcnEpochLocal + chrono::microseconds{OSTicksToMicroseconds(ticks)};

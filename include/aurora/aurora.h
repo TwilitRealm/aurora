@@ -167,20 +167,11 @@ typedef struct {
   AuroraLogLevel logLevel;
   AuroraImGuiInitCallback imGuiInitCallback;
   AuroraGxProcessingMode gxProcessingMode;
-
   /*
-   * The size of the GameCube's main memory, or MEM1 on the Wii.
-   * Note that it will not be allocated at the exact 0x80000000 address, as that cannot be guaranteed.
-   * This can be set to 0 to disable allocating this region.
+   * The size of the ARAM buffer, allocated by ARInit. Wii games that use ARALT should set what they need.
+   * 0 defaults to 16 MiB.
    */
-  uint32_t mem1Size;
-
-  /*
-   * The size of the GameCube's ARAM, or MEM2 on the Wii.
-   * This can be set to 0 to disable allocating this region.
-   */
-  uint32_t mem2Size;
-
+  uint32_t aramSize;
   AuroraSurfaceDesc surface;
 } AuroraConfig;
 

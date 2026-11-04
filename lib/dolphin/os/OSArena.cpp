@@ -1,58 +1,43 @@
-#include <cassert>
-
 #include "internal.hpp"
 
 #include <dolphin/os.h>
 
-#define ROUND64(n, a) (((u64)(n) + (a)-1) & ~(u64)((a)-1))
-#define TRUNC64(n, a) (((u64)(n)) & ~(u64)((a)-1))
+#if AURORA_ENABLE_HEAP
+#include <aurora/heap.h>
+#else
+#include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <cstdlib>
+#include <cstring>
+#endif
 
-static void* ArenaLow;
-static void* ArenaHigh;
+void* OSGetArenaHi() { return nullptr; }
 
-void* OSGetArenaHi() {
-  return ArenaHigh;
-}
+void* OSGetArenaLo() { return nullptr; }
 
-void* OSGetArenaLo() {
-  return ArenaLow;
-}
+void OSSetArenaHi(void* newHi) { Log.warn("OSSetArenaHi({}) ignored: there is no arena", newHi); }
 
-void OSSetArenaHi(void* newHi) {
-  assert(newHi <= MEM1End && newHi >= MEM1Start);
-  ArenaHigh = newHi;
-}
+void OSSetArenaLo(void* newLo) { Log.warn("OSSetArenaLo({}) ignored: there is no arena", newLo); }
 
-void OSSetArenaLo(void* newLo) {
-  assert(newLo <= MEM1End && newLo >= MEM1Start);
-  ArenaLow = newLo;
-}
-
-void* OSAllocFromArenaLo(const u32 size, const u32 align) {
-  void* ptr = OSGetArenaLo();
-  auto arenaLo = static_cast<u8*>(ptr = reinterpret_cast<void*>(ROUND64(ptr, align)));
-  arenaLo += size;
-  arenaLo = reinterpret_cast<u8*>(ROUND64(arenaLo, align));
-  OSSetArenaLo(arenaLo);
-  return ptr;
-}
-
-void* OSAllocFromArenaHi(const u32 size, const u32 align) {
-  void* ptr;
-
-  auto arenaHi = static_cast<u8*>(OSGetArenaHi());
-  arenaHi = reinterpret_cast<u8*>(TRUNC64(arenaHi, align));
-  arenaHi -= size;
-  arenaHi = static_cast<u8*>(ptr = reinterpret_cast<void*>(TRUNC64(arenaHi, align)));
-  OSSetArenaHi(arenaHi);
-  return ptr;
-}
-
-void AuroraInitArena() {
-  if (MEM1Start == nullptr) {
-    return;
+static void* AllocFromArena(u32 size, u32 align) {
+#if AURORA_ENABLE_HEAP
+  return aurora_heap_alloc(aurora_heap_global(), size, align, AURORA_HEAP_LANE_HEAD, 0);
+#else
+  const size_t alignment = std::bit_ceil(std::max<size_t>(align, alignof(std::max_align_t)));
+  const size_t alignedSize = (std::max<size_t>(size, 1) + alignment - 1) & ~(alignment - 1);
+#ifdef _WIN32
+  void* ptr = _aligned_malloc(alignedSize, alignment);
+#else
+  void* ptr = std::aligned_alloc(alignment, alignedSize);
+#endif
+  if (ptr != nullptr) {
+    std::memset(ptr, 0, alignedSize);
   }
-
-  OSSetArenaLo(static_cast<u8*>(MEM1Start) + ARENA_START_OFFSET);
-  OSSetArenaHi(MEM1End);
+  return ptr;
+#endif
 }
+
+void* OSAllocFromArenaLo(const u32 size, const u32 align) { return AllocFromArena(size, align); }
+
+void* OSAllocFromArenaHi(const u32 size, const u32 align) { return AllocFromArena(size, align); }

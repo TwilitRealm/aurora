@@ -304,7 +304,25 @@ target_include_directories(os_alloc_tests PRIVATE
 )
 target_compile_definitions(os_alloc_tests PRIVATE AURORA TARGET_PC=1)
 target_link_libraries(os_alloc_tests PRIVATE gtest gtest_main fmt::fmt)
+if (AURORA_ENABLE_HEAP)
+  target_sources(os_alloc_tests PRIVATE ../lib/heap.cpp)
+  target_compile_definitions(os_alloc_tests PRIVATE AURORA_ENABLE_HEAP=1)
+  target_link_libraries(os_alloc_tests PRIVATE mimalloc-static)
+endif ()
 gtest_discover_tests(os_alloc_tests)
+
+if (AURORA_ENABLE_HEAP)
+  add_executable(heap_tests
+    heap_test.cpp
+    os_test_globals.cpp
+    ../lib/heap.cpp
+    ../lib/logging.cpp
+  )
+  target_include_directories(heap_tests PRIVATE ../include)
+  target_compile_definitions(heap_tests PRIVATE AURORA TARGET_PC=1)
+  target_link_libraries(heap_tests PRIVATE gtest gtest_main fmt::fmt mimalloc-static)
+  gtest_discover_tests(heap_tests)
+endif ()
 
 add_executable(input_profile_tests input_profiles_test.cpp)
 target_include_directories(input_profile_tests PRIVATE ../include ../lib)
