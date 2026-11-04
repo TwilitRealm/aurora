@@ -32,12 +32,10 @@
 
 struct PCThreadData {
     std::thread nativeThread;
-    std::mutex mtx;
-    std::condition_variable cv;
     void* (*func)(void*);
     void* param;
-    bool started   = false;
-    bool suspended = false;
+    bool started = false;
+    std::atomic<bool> finished{false};
 
     ~PCThreadData() {
         if (aurora::os::IsShuttingDown && nativeThread.joinable()) {
@@ -77,6 +75,15 @@ static std::unordered_map<OSThreadQueue*, std::unique_ptr<std::condition_variabl
     return map;
 }
 
+static std::mutex& GetSuspendMutex() {
+    static std::mutex mtx;
+    return mtx;
+}
+static std::condition_variable& GetSuspendCV() {
+    static std::condition_variable cv;
+    return cv;
+}
+
 static std::condition_variable& GetQueueCV(OSThreadQueue* queue) {
     std::lock_guard<std::mutex> lock(GetQueueCvMutex());
     auto& map = GetQueueCvMap();
@@ -101,6 +108,10 @@ static thread_local OSThread* tls_currentThread = nullptr;
 static OSThread  sDefaultThread;
 static u8        sDefaultStack[64 * 1024];
 static u8        sDefaultStackEnd = OS_THREAD_STACK_MAGIC;
+static std::atomic sDefaultThreadClaimed{false};
+
+// Other threads not created by OSCreateThread (e.g. host callback threads)
+static thread_local OSThread tls_hostThread;
 
 // Global interrupt mutex (coarse-grained lock replacing interrupt disable)
 // Lazy-initialized to avoid DLL static init crashes
@@ -128,6 +139,10 @@ static void ThreadEntryWrapper(OSThread* thread, PCThreadData* data) {
     // Set thread-local pointer
     tls_currentThread = thread;
 
+    // Set context pointers for this thread
+    OSClearContext(&thread->context);
+    OSSetCurrentContext(&thread->context);
+
     thread->state = OS_THREAD_STATE_RUNNING;
 
     // Call the actual thread function
@@ -136,6 +151,7 @@ static void ThreadEntryWrapper(OSThread* thread, PCThreadData* data) {
     // Thread returned - equivalent to OSExitThread
     thread->val   = result;
     thread->state = OS_THREAD_STATE_MORIBUND;
+    data->finished.store(true, std::memory_order_release);
 }
 
 // ============================================================================
@@ -143,6 +159,18 @@ static void ThreadEntryWrapper(OSThread* thread, PCThreadData* data) {
 // ============================================================================
 
 void __OSThreadInit(void) {
+    if (sDefaultThreadClaimed.exchange(true)) {
+        tls_hostThread.state    = OS_THREAD_STATE_RUNNING;
+        tls_hostThread.attr     = OS_THREAD_ATTR_DETACH;
+        tls_hostThread.priority = 16;
+        tls_hostThread.base     = 16;
+        tls_hostThread.val      = reinterpret_cast<void*>(static_cast<intptr_t>(-1));
+        OSClearContext(&tls_hostThread.context);
+        OSSetCurrentContext(&tls_hostThread.context);
+        tls_currentThread = &tls_hostThread;
+        return;
+    }
+
     memset(&sDefaultThread, 0, sizeof(OSThread));
 
     sDefaultThread.state    = OS_THREAD_STATE_RUNNING;
@@ -165,6 +193,7 @@ void __OSThreadInit(void) {
     sDefaultStackEnd = OS_THREAD_STACK_MAGIC;
 
     OSClearContext(&sDefaultThread.context);
+    OSSetCurrentContext(&sDefaultThread.context);
 
     sDefaultThread.error = 0;
     sDefaultThread.specific[0] = nullptr;
@@ -233,6 +262,8 @@ int OSCreateThread(OSThread* thread, void* (*func)(void*), void* param,
     thread->stackEnd  = (u8*)((uintptr_t)stack - stackSize);
     *thread->stackEnd = OS_THREAD_STACK_MAGIC;
 
+    OSClearContext(&thread->context);
+
     thread->error = 0;
     thread->specific[0] = nullptr;
     thread->specific[1] = nullptr;
@@ -248,7 +279,7 @@ int OSCreateThread(OSThread* thread, void* (*func)(void*), void* param,
     }
 
     // Add to active queue
-    sActiveThreadCount++;
+    ++sActiveThreadCount;
 
     OSReport("[PC-OSThread] Created thread %p (priority=%d, stackSize=%u)\n",
              thread, priority, stackSize);
@@ -320,6 +351,7 @@ s32 OSResumeThread(OSThread* thread) {
     if (!thread)
         return 0;
 
+    std::lock_guard lock(GetSuspendMutex());
     s32 prevSuspend = thread->suspend;
     if (thread->suspend > 0) {
         thread->suspend--;
@@ -328,27 +360,13 @@ s32 OSResumeThread(OSThread* thread) {
     // Only wake up if suspend count drops to 0
     if (thread->suspend == 0) {
         PCThreadData* data = GetThreadData(thread);
-
-        if (data) {
-            // Lock the specific thread mutex to safely modify state and notify
-            std::unique_lock<std::mutex> threadLock(data->mtx);
-
-            if (!data->started) {
-                // First resume: launch the native thread
-                data->started = true;
-                data->suspended = false;
-
-                // Unlock before launching to avoid potential deadlocks in thread initialization
-                threadLock.unlock();
-
-                data->nativeThread = std::thread(ThreadEntryWrapper, thread, data);
-                OSReport("[PC-OSThread] Started thread %p\n", thread);
-            } else {
-                // Resume from suspension: signal the condition variable
-                // IMPORTANT: Set suspended to false BEFORE notifying to pass the wait predicate
-                data->suspended = false;
-                data->cv.notify_all();
-            }
+        if (data && !data->started) {
+            // First resume: launch the native thread
+            data->started = true;
+            data->nativeThread = std::thread(ThreadEntryWrapper, thread, data);
+            OSReport("[PC-OSThread] Started thread %p\n", thread);
+        } else {
+            GetSuspendCV().notify_all();
         }
     }
 
@@ -359,31 +377,14 @@ s32 OSSuspendThread(OSThread* thread) {
     if (!thread)
         return 0;
 
-    s32 prevSuspend = thread->suspend;
-    thread->suspend++;
+    const bool isCurrentThread = thread == OSGetCurrentThread();
+    std::unique_lock lock(GetSuspendMutex());
+    s32 prevSuspend = thread->suspend++;
 
-    // If transitioning from running (0) to suspended (1)
-    if (prevSuspend == 0) {
-        PCThreadData* data = GetThreadData(thread);
-
-        if (data && data->started) {
-            std::unique_lock<std::mutex> threadLock(data->mtx);
-            data->suspended = true;
-
-            // FIX: If the thread is suspending ITSELF, we must block execution here.
-            // This replicates the GameCube behavior where OSSuspendThread yields the CPU
-            // immediately.
-            if (thread == OSGetCurrentThread()) {
-                // Block until 'suspended' becomes false (set by OSResumeThread)
-                // The predicate protects against spurious wakeups.
-                data->cv.wait(threadLock, [data] { return !data->suspended; });
-            } else {
-                // NOTE: Suspending *other* threads is difficult in C++ std::thread
-                // without cooperative checkpoints or platform-specific hacks.
-                // For now, we only set the flag. The target thread would need to check 'suspended'
-                // periodically.
-            }
-        }
+    // A thread suspending itself blocks until resumed. Native threads can't be stopped from outside, so
+    // suspending another thread only raises its count.
+    if (isCurrentThread) {
+        GetSuspendCV().wait(lock, [thread] { return thread->suspend == 0; });
     }
 
     return prevSuspend;
@@ -398,6 +399,9 @@ void OSSleepThread(OSThreadQueue* queue) {
 
     OSThread* currentThread = OSGetCurrentThread();
     if (!currentThread) return;
+
+    std::condition_variable& cv = GetQueueCV(queue);
+    std::unique_lock lock(GetQueueCvMutex());
 
     currentThread->state = OS_THREAD_STATE_WAITING;
     currentThread->queue = queue;
@@ -414,8 +418,6 @@ void OSSleepThread(OSThreadQueue* queue) {
     queue->tail = currentThread;
 
     // Wait on the condition variable for this queue
-    std::condition_variable& cv = GetQueueCV(queue);
-    std::unique_lock<std::mutex> lock(GetQueueCvMutex());
     cv.wait(lock, [currentThread]() {
         return currentThread->state != OS_THREAD_STATE_WAITING;
     });
@@ -423,6 +425,9 @@ void OSSleepThread(OSThreadQueue* queue) {
 
 void OSWakeupThread(OSThreadQueue* queue) {
     if (!queue) return;
+
+    std::condition_variable& cv = GetQueueCV(queue);
+    std::lock_guard lock(GetQueueCvMutex());
 
     // Wake all threads in the queue
     OSThread* thread = queue->head;
@@ -437,7 +442,6 @@ void OSWakeupThread(OSThreadQueue* queue) {
     queue->head = queue->tail = nullptr;
 
     // Notify all waiters
-    std::condition_variable& cv = GetQueueCV(queue);
     cv.notify_all();
 }
 
@@ -459,7 +463,7 @@ void OSExitThread(void* val) {
 
     // Wake anyone waiting to join
     OSWakeupThread(&currentThread->queueJoin);
-    sActiveThreadCount--;
+    --sActiveThreadCount;
 }
 
 void OSCancelThread(OSThread* thread) {
@@ -473,7 +477,7 @@ void OSCancelThread(OSThread* thread) {
     }
 
     OSWakeupThread(&thread->queueJoin);
-    sActiveThreadCount--;
+    --sActiveThreadCount;
 }
 
 void OSDetachThread(OSThread* thread) {
@@ -496,7 +500,7 @@ BOOL OSJoinThread(OSThread* thread, void** val) {
 
     if (thread->state == OS_THREAD_STATE_MORIBUND) {
         if (val) {
-            *(s32*)val = (s32)(intptr_t)thread->val;
+            *val = thread->val;
         }
         thread->state = 0;
 
@@ -504,7 +508,7 @@ BOOL OSJoinThread(OSThread* thread, void** val) {
             std::lock_guard mapLock(GetThreadDataMutex());
             GetThreadDataMap().erase(thread);
         }
-        sActiveThreadCount--;
+        --sActiveThreadCount;
         return 1;
     }
     return 0;
@@ -519,11 +523,16 @@ void OSYieldThread(void) {
 }
 
 BOOL OSIsThreadSuspended(OSThread* thread) {
-    return (thread && thread->suspend > 0) ? TRUE : FALSE;
+    if (!thread) return FALSE;
+    std::lock_guard lock(GetSuspendMutex());
+    return thread->suspend > 0 ? TRUE : FALSE;
 }
 
 BOOL OSIsThreadTerminated(OSThread* thread) {
     if (!thread) return TRUE;
+    if (PCThreadData* data = GetThreadData(thread)) {
+        return data->finished.load(std::memory_order_acquire) ? TRUE : FALSE;
+    }
     return (thread->state == OS_THREAD_STATE_MORIBUND || thread->state == 0) ? TRUE : FALSE;
 }
 

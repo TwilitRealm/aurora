@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
+
 namespace aurora::os {
 
-extern bool IsShuttingDown;
+extern std::atomic<bool> IsShuttingDown;
 
 }

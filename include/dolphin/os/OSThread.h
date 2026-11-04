@@ -102,6 +102,12 @@ s32 OSCheckActiveThreads(void);
 void OSSetThreadSpecific(s32 index, void* ptr);
 void* OSGetThreadSpecific(s32 index);
 
+/**
+ * Aurora extension: marks the process as shutting down.
+ * Message queue operations fail afterwards, and threads that were never joined are detached at exit.
+ */
+void OSBeginShutdown(void);
+
 OSSwitchThreadCallback OSSetSwitchThreadCallback(OSSwitchThreadCallback callback);
 
 #define IsSuspended(suspend) (suspend > 0)
