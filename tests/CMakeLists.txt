@@ -324,6 +324,17 @@ if (AURORA_ENABLE_HEAP)
   gtest_discover_tests(heap_tests)
 endif ()
 
+if (AURORA_OS_THREADS)
+  add_executable(os_mutex_tests
+    os_mutex_test.cpp
+    ../lib/dolphin/os/os_threads/OSMutex.cpp
+  )
+  target_include_directories(os_mutex_tests PRIVATE ../include)
+  target_compile_definitions(os_mutex_tests PRIVATE AURORA TARGET_PC=1)
+  target_link_libraries(os_mutex_tests PRIVATE gtest gtest_main)
+  gtest_discover_tests(os_mutex_tests)
+endif ()
+
 add_executable(input_profile_tests input_profiles_test.cpp)
 target_include_directories(input_profile_tests PRIVATE ../include ../lib)
 target_link_libraries(input_profile_tests PRIVATE aurora::pad aurora::si gtest gtest_main absl::flat_hash_map)

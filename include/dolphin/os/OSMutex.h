@@ -8,14 +8,24 @@ extern "C" {
 #endif
 
 struct OSMutex {
-    /* 0x00 */ OSThreadQueue queue;
-    /* 0x08 */ OSThread* thread;
-    /* 0x0C */ s32 count;
-    /* 0x10 */ OSMutexLink link;
+  /* 0x00 */ OSThreadQueue queue;
+  /* 0x08 */ OSThread* thread;
+  /* 0x0C */ s32 count;
+  /* 0x10 */ OSMutexLink link;
+#ifdef TARGET_PC
+  void* owner;
+  union {
+    u32 word;
+    void* ptr;
+  } lock;
+#endif
 };
 
 typedef struct OSCond {
-    OSThreadQueue queue;
+  OSThreadQueue queue;
+#ifdef TARGET_PC
+  u32 sequence;
+#endif
 } OSCond;
 
 void OSInitMutex(OSMutex* mutex);

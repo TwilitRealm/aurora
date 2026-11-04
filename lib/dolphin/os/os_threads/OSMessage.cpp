@@ -2,6 +2,8 @@
 
 #include "OSThreadShutdown.hpp"
 
+#include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
