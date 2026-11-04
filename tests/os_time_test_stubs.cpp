@@ -1,10 +1,6 @@
 #include <aurora/aurora.h>
 #include <dolphin/os.h>
 
-#include <cstdint>
-
-uintptr_t OSBaseAddress = 0;
-
 namespace aurora {
 
 AuroraConfig g_config{};

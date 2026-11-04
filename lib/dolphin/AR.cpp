@@ -17,9 +17,11 @@ static BOOL AR_init_flag;
 // and using a simple bump allocator (matching ARAlloc behavior on real hardware).
 static u8* sAramBuffer = nullptr;
 
+static u32 aramSize() { return aurora::g_config.aramSize != 0 ? aurora::g_config.aramSize : 16 * 1024 * 1024; }
+
 // Convert an ARAM "address" (offset) to a real host pointer
 static u8* aramToHost(uintptr_t aramAddr) {
-  if (!sAramBuffer || aramAddr >= aurora::g_config.mem2Size) {
+  if (!sAramBuffer || aramAddr >= aramSize()) {
     return nullptr;
   }
   return sAramBuffer + aramAddr;
@@ -53,18 +55,13 @@ u32 ARFree(u32* length) {
 BOOL ARCheckInit(void) { return AR_init_flag; }
 
 u32 ARInit(u32* stack_index_addr, u32 num_entries) {
-  if (aurora::g_config.mem2Size == 0) {
-    Log.warn("ARInit called but no mem2Size specified in AuroraConfig. ARAM will not be available!");
-    return 0;
-  }
-
   if (AR_init_flag == TRUE) {
     return ARAM_STACK_START;
   }
 
-  sAramBuffer = (u8*)calloc(1, aurora::g_config.mem2Size);
+  sAramBuffer = static_cast<u8*>(calloc(1, aramSize()));
   if (sAramBuffer) {
-    Log.debug("Initialized 0x{:X} bytes of ARAM!", aurora::g_config.mem2Size);
+    Log.debug("Initialized 0x{:X} bytes of ARAM!", aramSize());
   } else {
     Log.fatal("Failed to allocate ARAM!");
   }
@@ -77,7 +74,7 @@ u32 ARInit(u32* stack_index_addr, u32 num_entries) {
   return AR_StackPointer;
 }
 
-u32 ARGetSize(void) { return aurora::g_config.mem2Size; }
+u32 ARGetSize() { return aramSize(); }
 
 #if !defined(_MSC_VER)
 #pragma mark ARQ
@@ -112,9 +109,7 @@ void ARQInit() {
   // Nothing to do on PC - ARAM is initialized in ARInit
 }
 
-void* ARGetStorageAddress() {
-  return sAramBuffer;
-}
+void* ARGetStorageAddress() { return sAramBuffer; }
 
 void ARStartDMA(u32 type, uintptr_t mainmem_addr, uintptr_t aram_addr, u32 length) {
   if (type == ARAM_DIR_MRAM_TO_ARAM) {

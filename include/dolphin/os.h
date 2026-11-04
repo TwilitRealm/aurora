@@ -72,12 +72,12 @@ typedef struct {
 #define OS_UNCACHED_REGION_PREFIX 0xC000
 #define OS_PHYSICAL_MASK 0x3FFF
 
+#ifdef __MWERKS__
 extern uintptr_t OSBaseAddress;
 
 #define OS_BASE_CACHED   (OSBaseAddress)
 #define OS_BASE_UNCACHED (OSBaseAddress)
 
-#ifdef __MWERKS__
 u32 __OSPhysicalMemSize AT_ADDRESS(OS_BASE_CACHED | 0x0028);
 volatile int __OSTVMode AT_ADDRESS(OS_BASE_CACHED | 0x00CC);
 OSThreadQueue __OSActiveThreadQueue AT_ADDRESS(OS_BASE_CACHED | 0x00DC);
@@ -93,8 +93,8 @@ OSThread* __gUnkThread1 AT_ADDRESS(OS_BASE_CACHED | 0x00D8);
 int __gUnknown800030C0[2] AT_ADDRESS(OS_BASE_CACHED | 0x30C0);
 u8 __gUnknown800030E3 AT_ADDRESS(OS_BASE_CACHED | 0x30E3);
 #else
-#define __OSBusClock  (*(u32 *)(OS_BASE_CACHED + 0x00F8))
-#define __OSCoreClock (*(u32 *)(OS_BASE_CACHED + 0x00FC))
+#define __OSBusClock  OS_BUS_CLOCK
+#define __OSCoreClock OS_CORE_CLOCK
 #endif
 
 #define OS_TIMER_CLOCK_DIVIDER 4
@@ -227,12 +227,15 @@ void OSFatal NORETURN(GXColor fg, GXColor bg, const char* msg);
 #define OSRoundUp32B(x)   (((uintptr_t)(x) + 32 - 1) & ~(32 - 1))
 #define OSRoundDown32B(x) (((uintptr_t)(x)) & ~(32 - 1))
 
+void* OSCachedToUncached(void* caddr);
+void* OSUncachedToCached(void* ucaddr);
+
+#ifndef TARGET_PC
 void* OSPhysicalToCached(u32 paddr);
 void* OSPhysicalToUncached(u32 paddr);
 u32 OSCachedToPhysical(void* caddr);
 u32 OSUncachedToPhysical(void* ucaddr);
-void* OSCachedToUncached(void* caddr);
-void* OSUncachedToCached(void* ucaddr);
+#endif
 
 #if !DEBUG && !defined(TARGET_PC)
 #define OSPhysicalToCached(paddr)    ((void*) ((u32)(OS_BASE_CACHED   + (u32)(paddr))))

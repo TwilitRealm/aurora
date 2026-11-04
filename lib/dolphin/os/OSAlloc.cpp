@@ -2,233 +2,155 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+#include <vector>
 
 #include "../../logging.hpp"
+
+#if AURORA_ENABLE_HEAP
+#include <aurora/heap.h>
+#else
+#include <algorithm>
+#include <cstdlib>
+#include <unordered_map>
+#endif
 
 extern "C" volatile OSHeapHandle __OSCurrHeap = -1;
 
 namespace {
 
 constexpr u32 kAlignment = 32;
-constexpr u32 kHeaderSize = 32;
-constexpr u32 kMinObjectSize = 64;
+// Reported by OSCheckHeap as the free size of every valid heap
+constexpr s32 kHeadroom = 0x10000000;
 
-struct HeapDesc;
+aurora::Module AllocLog("aurora::os::alloc");
 
-struct alignas(32) Cell {
-  Cell* prev;
-  Cell* next;
-  s32 size;
-  HeapDesc* owner;
+#if AURORA_ENABLE_HEAP
+using Heap = AuroraHeap;
+
+Heap* createHeap(OSHeapHandle handle) {
+  char name[32];
+  snprintf(name, sizeof(name), "OSHeap %d", handle);
+  const AuroraHeapDesc desc{AURORA_HEAP_GENERAL, AURORA_HEAP_ZERO, nullptr, name};
+  return aurora_heap_create(&desc);
+}
+
+void destroyHeap(Heap* heap) { aurora_heap_destroy(heap); }
+
+void* allocFromHeap(Heap* heap, u32 size) {
+  return aurora_heap_alloc(heap, size, kAlignment, AURORA_HEAP_LANE_HEAD, 0);
+}
+
+void freeToHeap(Heap* heap, void* ptr) { aurora_heap_free(heap, ptr); }
+
+u32 blockSize(Heap* heap, void* ptr) { return static_cast<u32>(aurora_heap_block_size(heap, ptr)); }
+
+void heapStats(Heap* heap, size_t& usedBytes, size_t& blockCount) {
+  AuroraHeapStats stats;
+  aurora_heap_stats(heap, &stats);
+  usedBytes = stats.usedBytes;
+  blockCount = stats.blockCount;
+}
+
+void visitHeap(Heap* heap, void (*visitor)(void*, u32)) {
+  aurora_heap_visit(
+      heap, AURORA_HEAP_LANE_ALL,
+      [](void* arg, void* p, size_t size, int, uint8_t) {
+        reinterpret_cast<void (*)(void*, u32)>(arg)(p, static_cast<u32>(size));
+        return true;
+      },
+      reinterpret_cast<void*>(visitor));
+}
+#else
+struct Heap {
+  std::mutex mutex;
+  std::unordered_map<void*, u32> blocks;
+  size_t usedBytes = 0;
 };
 
-static_assert(sizeof(Cell) == kHeaderSize, "Cell header must stay 32 bytes");
-
-struct HeapDesc {
-  s32 size;
-  Cell* freeList;
-  Cell* allocated;
-};
-
-static aurora::Module AllocLog("aurora::os::alloc");
-
-static HeapDesc* sHeapArray = nullptr;
-static int sNumHeaps = 0;
-static u8* sArenaStart = nullptr;
-static u8* sArenaEnd = nullptr;
-
-static uintptr_t roundUp32(const uintptr_t value) {
-  return (value + (kAlignment - 1)) & ~(static_cast<uintptr_t>(kAlignment - 1));
+void releaseMemory(void* ptr) {
+#ifdef _WIN32
+  _aligned_free(ptr);
+#else
+  std::free(ptr);
+#endif
 }
 
-static uintptr_t roundDown32(const uintptr_t value) {
-  return value & ~(static_cast<uintptr_t>(kAlignment - 1));
-}
+Heap* createHeap(OSHeapHandle) { return new Heap; }
 
-static bool inArena(const void* ptr) {
-  if (sArenaStart == nullptr || sArenaEnd == nullptr) {
-    return false;
+void destroyHeap(Heap* heap) {
+  for (const auto& [ptr, size] : heap->blocks) {
+    releaseMemory(ptr);
   }
-  const auto p = reinterpret_cast<uintptr_t>(ptr);
-  return p >= reinterpret_cast<uintptr_t>(sArenaStart) && p < reinterpret_cast<uintptr_t>(sArenaEnd);
+  delete heap;
 }
 
-static bool validHeapHandle(const OSHeapHandle heap) {
-  return sHeapArray != nullptr && heap >= 0 && heap < sNumHeaps && sHeapArray[heap].size >= 0;
-}
-
-static Cell* addFront(Cell* list, Cell* cell) {
-  cell->prev = nullptr;
-  cell->next = list;
-  if (list != nullptr) {
-    list->prev = cell;
+void* allocFromHeap(Heap* heap, u32 size) {
+  const size_t total = (std::max<size_t>(size, 1) + kAlignment - 1) & ~size_t(kAlignment - 1);
+#ifdef _WIN32
+  void* ptr = _aligned_malloc(total, kAlignment);
+#else
+  void* ptr = std::aligned_alloc(kAlignment, total);
+#endif
+  if (ptr == nullptr) {
+    return nullptr;
   }
-  return cell;
+  std::memset(ptr, 0, total);
+  std::lock_guard lock(heap->mutex);
+  heap->blocks.emplace(ptr, size);
+  heap->usedBytes += size;
+  return ptr;
 }
 
-static Cell* extract(Cell* list, Cell* cell) {
-  if (cell->next != nullptr) {
-    cell->next->prev = cell->prev;
-  }
-  if (cell->prev != nullptr) {
-    cell->prev->next = cell->next;
-    return list;
-  }
-  return cell->next;
-}
-
-static bool containsCell(Cell* list, Cell* cell) {
-  for (Cell* it = list; it != nullptr; it = it->next) {
-    if (it == cell) {
-      return true;
+void freeToHeap(Heap* heap, void* ptr) {
+  {
+    std::lock_guard lock(heap->mutex);
+    const auto it = heap->blocks.find(ptr);
+    if (it == heap->blocks.end()) {
+      return;
     }
+    heap->usedBytes -= it->second;
+    heap->blocks.erase(it);
   }
-  return false;
+  releaseMemory(ptr);
 }
 
-static Cell* insertAndCoalesce(Cell* list, Cell* cell) {
-  Cell* prev = nullptr;
-  Cell* next = list;
-  while (next != nullptr && next < cell) {
-    prev = next;
-    next = next->next;
-  }
-
-  cell->prev = prev;
-  cell->next = next;
-  if (prev != nullptr) {
-    prev->next = cell;
-  } else {
-    list = cell;
-  }
-  if (next != nullptr) {
-    next->prev = cell;
-  }
-
-  if (cell->next != nullptr) {
-    auto* right = cell->next;
-    if (reinterpret_cast<u8*>(cell) + cell->size == reinterpret_cast<u8*>(right)) {
-      cell->size += right->size;
-      cell->next = right->next;
-      if (right->next != nullptr) {
-        right->next->prev = cell;
-      }
-    }
-  }
-
-  if (cell->prev != nullptr) {
-    auto* left = cell->prev;
-    if (reinterpret_cast<u8*>(left) + left->size == reinterpret_cast<u8*>(cell)) {
-      left->size += cell->size;
-      left->next = cell->next;
-      if (cell->next != nullptr) {
-        cell->next->prev = left;
-      }
-      return list;
-    }
-  }
-
-  return list;
+u32 blockSize(Heap* heap, void* ptr) {
+  std::lock_guard lock(heap->mutex);
+  const auto it = heap->blocks.find(ptr);
+  return it != heap->blocks.end() ? it->second : 0;
 }
 
-static bool validateBlockRange(const uintptr_t start, const uintptr_t end) {
-  if (start >= end) {
-    return false;
-  }
-  if (sArenaStart == nullptr || sArenaEnd == nullptr) {
-    return false;
-  }
-  return start >= reinterpret_cast<uintptr_t>(sArenaStart)
-      && end <= reinterpret_cast<uintptr_t>(sArenaEnd)
-      && (end - start) >= kMinObjectSize;
+void heapStats(Heap* heap, size_t& usedBytes, size_t& blockCount) {
+  std::lock_guard lock(heap->mutex);
+  usedBytes = heap->usedBytes;
+  blockCount = heap->blocks.size();
 }
 
-static void dropTinyCell(HeapDesc& hd, Cell* cell) {
-  hd.freeList = extract(hd.freeList, cell);
-  hd.size -= cell->size;
-}
-
-static void carveRangeFromHeap(HeapDesc& hd, uintptr_t carveStart, uintptr_t carveEnd) {
-  Cell* cell = hd.freeList;
-  while (cell != nullptr) {
-    Cell* nextCell = cell->next;
-    const auto cellStart = reinterpret_cast<uintptr_t>(cell);
-    const auto cellEnd = cellStart + static_cast<uintptr_t>(cell->size);
-
-    const auto overlapStart = carveStart > cellStart ? carveStart : cellStart;
-    const auto overlapEnd = carveEnd < cellEnd ? carveEnd : cellEnd;
-    if (overlapStart >= overlapEnd) {
-      cell = nextCell;
-      continue;
-    }
-
-    const auto removed = static_cast<s32>(overlapEnd - overlapStart);
-    hd.size -= removed;
-
-    const bool cutHead = overlapStart == cellStart;
-    const bool cutTail = overlapEnd == cellEnd;
-
-    if (cutHead && cutTail) {
-      hd.freeList = extract(hd.freeList, cell);
-    } else if (cutHead) {
-      auto* newCell = reinterpret_cast<Cell*>(overlapEnd);
-      newCell->size = static_cast<s32>(cellEnd - overlapEnd);
-      newCell->owner = nullptr;
-      newCell->prev = cell->prev;
-      newCell->next = cell->next;
-      if (newCell->prev != nullptr) {
-        newCell->prev->next = newCell;
-      } else {
-        hd.freeList = newCell;
-      }
-      if (newCell->next != nullptr) {
-        newCell->next->prev = newCell;
-      }
-      if (newCell->size < static_cast<s32>(kMinObjectSize)) {
-        dropTinyCell(hd, newCell);
-      }
-    } else if (cutTail) {
-      cell->size = static_cast<s32>(overlapStart - cellStart);
-      if (cell->size < static_cast<s32>(kMinObjectSize)) {
-        dropTinyCell(hd, cell);
-      }
-    } else {
-      const auto leftSize = static_cast<s32>(overlapStart - cellStart);
-      const auto rightSize = static_cast<s32>(cellEnd - overlapEnd);
-      if (leftSize >= static_cast<s32>(kMinObjectSize) && rightSize >= static_cast<s32>(kMinObjectSize)) {
-        auto* right = reinterpret_cast<Cell*>(overlapEnd);
-        right->size = rightSize;
-        right->owner = nullptr;
-        right->prev = cell;
-        right->next = cell->next;
-        if (right->next != nullptr) {
-          right->next->prev = right;
-        }
-        cell->next = right;
-        cell->size = leftSize;
-      } else if (leftSize >= static_cast<s32>(kMinObjectSize)) {
-        cell->size = leftSize;
-      } else if (rightSize >= static_cast<s32>(kMinObjectSize)) {
-        auto* right = reinterpret_cast<Cell*>(overlapEnd);
-        right->size = rightSize;
-        right->owner = nullptr;
-        right->prev = cell->prev;
-        right->next = cell->next;
-        if (right->prev != nullptr) {
-          right->prev->next = right;
-        } else {
-          hd.freeList = right;
-        }
-        if (right->next != nullptr) {
-          right->next->prev = right;
-        }
-      } else {
-        hd.freeList = extract(hd.freeList, cell);
-      }
-    }
-
-    cell = nextCell;
+void visitHeap(Heap* heap, void (*visitor)(void*, u32)) {
+  std::vector<std::pair<void*, u32>> blocks;
+  {
+    std::lock_guard lock(heap->mutex);
+    blocks.assign(heap->blocks.begin(), heap->blocks.end());
   }
+  for (const auto& [ptr, size] : blocks) {
+    visitor(ptr, size);
+  }
+}
+#endif
+
+std::mutex sHeapsMutex;
+std::vector<Heap*> sHeaps;
+bool sInitialized = false;
+
+Heap* getHeap(OSHeapHandle handle) {
+  std::lock_guard lock(sHeapsMutex);
+  if (handle < 0 || static_cast<size_t>(handle) >= sHeaps.size()) {
+    return nullptr;
+  }
+  return sHeaps[handle];
 }
 
 } // namespace
@@ -236,327 +158,139 @@ static void carveRangeFromHeap(HeapDesc& hd, uintptr_t carveStart, uintptr_t car
 extern "C" {
 
 void* OSInitAlloc(void* arenaStart, void* arenaEnd, int maxHeaps) {
-  if (arenaStart == nullptr || arenaEnd == nullptr || maxHeaps <= 0) {
+  if (maxHeaps <= 0) {
     return nullptr;
   }
 
-  auto start = reinterpret_cast<uintptr_t>(arenaStart);
-  auto end = reinterpret_cast<uintptr_t>(arenaEnd);
-  if (start >= end) {
-    return nullptr;
+  std::vector<Heap*> old;
+  {
+    std::lock_guard lock(sHeapsMutex);
+    old.swap(sHeaps);
+    sHeaps.assign(maxHeaps, nullptr);
+    sInitialized = true;
   }
-
-  const auto arrayBytes = static_cast<uintptr_t>(maxHeaps) * sizeof(HeapDesc);
-  if ((end - start) < arrayBytes + kMinObjectSize) {
-    return nullptr;
-  }
-
-  sHeapArray = reinterpret_cast<HeapDesc*>(arenaStart);
-  sNumHeaps = maxHeaps;
-  for (int i = 0; i < sNumHeaps; ++i) {
-    sHeapArray[i].size = -1;
-    sHeapArray[i].freeList = nullptr;
-    sHeapArray[i].allocated = nullptr;
+  for (Heap* heap : old) {
+    if (heap != nullptr) {
+      destroyHeap(heap);
+    }
   }
 
   __OSCurrHeap = -1;
-  sArenaStart = reinterpret_cast<u8*>(roundUp32(start + arrayBytes));
-  sArenaEnd = reinterpret_cast<u8*>(roundDown32(end));
-  if (sArenaEnd <= sArenaStart || static_cast<uintptr_t>(sArenaEnd - sArenaStart) < kMinObjectSize) {
-    sHeapArray = nullptr;
-    sNumHeaps = 0;
-    sArenaStart = nullptr;
-    sArenaEnd = nullptr;
-    return nullptr;
-  }
-
-  return sArenaStart;
+  return arenaStart;
 }
 
 OSHeapHandle OSCreateHeap(void* start, void* end) {
-  if (sHeapArray == nullptr) {
+  std::lock_guard lock(sHeapsMutex);
+  if (!sInitialized) {
     return -1;
   }
-
-  const auto blockStart = roundUp32(reinterpret_cast<uintptr_t>(start));
-  const auto blockEnd = roundDown32(reinterpret_cast<uintptr_t>(end));
-  if (!validateBlockRange(blockStart, blockEnd)) {
-    return -1;
-  }
-
-  for (OSHeapHandle heap = 0; heap < sNumHeaps; ++heap) {
-    auto& hd = sHeapArray[heap];
-    if (hd.size >= 0) {
+  for (size_t i = 0; i < sHeaps.size(); ++i) {
+    if (sHeaps[i] != nullptr) {
       continue;
     }
-
-    hd.size = static_cast<s32>(blockEnd - blockStart);
-    hd.allocated = nullptr;
-    hd.freeList = reinterpret_cast<Cell*>(blockStart);
-    hd.freeList->prev = nullptr;
-    hd.freeList->next = nullptr;
-    hd.freeList->size = hd.size;
-    hd.freeList->owner = nullptr;
-    return heap;
+    const auto handle = static_cast<OSHeapHandle>(i);
+    sHeaps[i] = createHeap(handle);
+    return sHeaps[i] != nullptr ? handle : -1;
   }
-
   return -1;
 }
 
 void OSDestroyHeap(OSHeapHandle heap) {
-  if (!validHeapHandle(heap)) {
-    return;
+  Heap* destroyed = nullptr;
+  {
+    std::lock_guard lock(sHeapsMutex);
+    if (heap < 0 || static_cast<size_t>(heap) >= sHeaps.size()) {
+      return;
+    }
+    destroyed = sHeaps[heap];
+    sHeaps[heap] = nullptr;
   }
-
-  auto& hd = sHeapArray[heap];
-  hd.size = -1;
-  hd.freeList = nullptr;
-  hd.allocated = nullptr;
+  if (destroyed != nullptr) {
+    destroyHeap(destroyed);
+  }
   if (__OSCurrHeap == heap) {
     __OSCurrHeap = -1;
   }
 }
 
-void OSAddToHeap(OSHeapHandle heap, void* start, void* end) {
-  if (!validHeapHandle(heap)) {
-    return;
-  }
-
-  const auto blockStart = roundUp32(reinterpret_cast<uintptr_t>(start));
-  const auto blockEnd = roundDown32(reinterpret_cast<uintptr_t>(end));
-  if (!validateBlockRange(blockStart, blockEnd)) {
-    return;
-  }
-
-  auto& hd = sHeapArray[heap];
-  auto* cell = reinterpret_cast<Cell*>(blockStart);
-  cell->prev = nullptr;
-  cell->next = nullptr;
-  cell->size = static_cast<s32>(blockEnd - blockStart);
-  cell->owner = nullptr;
-  hd.freeList = insertAndCoalesce(hd.freeList, cell);
-  hd.size += cell->size;
-}
+void OSAddToHeap(OSHeapHandle heap, void* start, void* end) {}
 
 void* OSAllocFromHeap(OSHeapHandle heap, u32 size) {
-  if (!validHeapHandle(heap) || size == 0) {
+  Heap* h = getHeap(heap);
+  if (h == nullptr) {
     return nullptr;
   }
-
-  auto& hd = sHeapArray[heap];
-  const auto requested = static_cast<s32>(roundUp32(static_cast<uintptr_t>(size) + kHeaderSize));
-
-  Cell* cell = hd.freeList;
-  while (cell != nullptr && cell->size < requested) {
-    cell = cell->next;
-  }
-  if (cell == nullptr) {
-    return nullptr;
-  }
-
-  const auto leftover = cell->size - requested;
-  if (leftover < static_cast<s32>(kMinObjectSize)) {
-    hd.freeList = extract(hd.freeList, cell);
-  } else {
-    auto* split = reinterpret_cast<Cell*>(reinterpret_cast<u8*>(cell) + requested);
-    split->size = leftover;
-    split->owner = nullptr;
-    split->prev = cell->prev;
-    split->next = cell->next;
-    if (split->prev != nullptr) {
-      split->prev->next = split;
-    } else {
-      hd.freeList = split;
-    }
-    if (split->next != nullptr) {
-      split->next->prev = split;
-    }
-    cell->size = requested;
-  }
-
-  cell->owner = &hd;
-  hd.allocated = addFront(hd.allocated, cell);
-  return reinterpret_cast<u8*>(cell) + kHeaderSize;
+  return allocFromHeap(h, size);
 }
 
 void OSFreeToHeap(OSHeapHandle heap, void* ptr) {
-  if (!validHeapHandle(heap) || ptr == nullptr) {
+  Heap* h = getHeap(heap);
+  if (h == nullptr) {
     return;
   }
-  if (!inArena(ptr) || (reinterpret_cast<uintptr_t>(ptr) & (kAlignment - 1)) != 0) {
-    return;
-  }
-
-  auto& hd = sHeapArray[heap];
-  auto* cell = reinterpret_cast<Cell*>(reinterpret_cast<u8*>(ptr) - kHeaderSize);
-  if (cell->owner != &hd || !containsCell(hd.allocated, cell)) {
-    return;
-  }
-
-  hd.allocated = extract(hd.allocated, cell);
-  cell->owner = nullptr;
-  hd.freeList = insertAndCoalesce(hd.freeList, cell);
+  freeToHeap(h, ptr);
 }
 
 OSHeapHandle OSSetCurrentHeap(OSHeapHandle heap) {
   const auto prev = __OSCurrHeap;
-  if (heap == -1 || validHeapHandle(heap)) {
+  if (heap == -1 || getHeap(heap) != nullptr) {
     __OSCurrHeap = heap;
   }
   return prev;
 }
 
 void* OSAllocFixed(void* rstart, void* rend) {
-  if (sHeapArray == nullptr || rstart == nullptr || rend == nullptr) {
-    return nullptr;
-  }
-
-  for (int i = 0; i < sNumHeaps; ++i) {
-    if (sHeapArray[i].size >= 0 && sHeapArray[i].allocated != nullptr) {
-      return nullptr;
-    }
-  }
-
-  const auto fixedStart = roundDown32(reinterpret_cast<uintptr_t>(rstart));
-  const auto fixedEnd = roundUp32(reinterpret_cast<uintptr_t>(rend));
-  if (fixedStart >= fixedEnd) {
-    return nullptr;
-  }
-  if (fixedStart < reinterpret_cast<uintptr_t>(sArenaStart)
-      || fixedEnd > reinterpret_cast<uintptr_t>(sArenaEnd)) {
-    return nullptr;
-  }
-
-  for (int i = 0; i < sNumHeaps; ++i) {
-    auto& hd = sHeapArray[i];
-    if (hd.size >= 0) {
-      carveRangeFromHeap(hd, fixedStart, fixedEnd);
-    }
-  }
-
-  return reinterpret_cast<void*>(fixedStart);
+  AllocLog.warn("OSAllocFixed({}, {}) is not supported: heaps are not carved out of the arena", rstart, rend);
+  return nullptr;
 }
 
-s32 OSCheckHeap(OSHeapHandle heap) {
-  if (!validHeapHandle(heap)) {
-    return -1;
-  }
-
-  auto& hd = sHeapArray[heap];
-  s32 total = 0;
-  s32 freeBytes = 0;
-
-  if (hd.allocated != nullptr && hd.allocated->prev != nullptr) {
-    return -1;
-  }
-
-  for (Cell* cell = hd.allocated; cell != nullptr; cell = cell->next) {
-    if (!inArena(cell)
-        || (reinterpret_cast<uintptr_t>(cell) & (kAlignment - 1)) != 0
-        || cell->size < static_cast<s32>(kMinObjectSize)
-        || (cell->size & (kAlignment - 1)) != 0
-        || cell->owner != &hd
-        || (cell->next != nullptr && cell->next->prev != cell)) {
-      return -1;
-    }
-    total += cell->size;
-    if (total <= 0 || total > hd.size) {
-      return -1;
-    }
-  }
-
-  if (hd.freeList != nullptr && hd.freeList->prev != nullptr) {
-    return -1;
-  }
-
-  for (Cell* cell = hd.freeList; cell != nullptr; cell = cell->next) {
-    if (!inArena(cell)
-        || (reinterpret_cast<uintptr_t>(cell) & (kAlignment - 1)) != 0
-        || cell->size < static_cast<s32>(kMinObjectSize)
-        || (cell->size & (kAlignment - 1)) != 0
-        || cell->owner != nullptr
-        || (cell->next != nullptr && cell->next->prev != cell)) {
-      return -1;
-    }
-    if (cell->next != nullptr) {
-      if (reinterpret_cast<uintptr_t>(cell) + static_cast<uintptr_t>(cell->size)
-          > reinterpret_cast<uintptr_t>(cell->next)) {
-        return -1;
-      }
-    }
-
-    total += cell->size;
-    freeBytes += cell->size - static_cast<s32>(kHeaderSize);
-    if (total <= 0 || total > hd.size) {
-      return -1;
-    }
-  }
-
-  if (total != hd.size) {
-    return -1;
-  }
-  return freeBytes;
-}
+s32 OSCheckHeap(OSHeapHandle heap) { return getHeap(heap) != nullptr ? kHeadroom : -1; }
 
 u32 OSReferentSize(void* ptr) {
-  if (ptr == nullptr || !inArena(ptr) || (reinterpret_cast<uintptr_t>(ptr) & (kAlignment - 1)) != 0) {
+  if (ptr == nullptr) {
     return 0;
   }
-  auto* cell = reinterpret_cast<Cell*>(reinterpret_cast<u8*>(ptr) - kHeaderSize);
-  if (cell->owner == nullptr) {
-    return 0;
+  std::vector<Heap*> heaps;
+  {
+    std::lock_guard lock(sHeapsMutex);
+    heaps = sHeaps;
   }
-  return static_cast<u32>(cell->size - static_cast<s32>(kHeaderSize));
+  for (Heap* heap : heaps) {
+    if (heap == nullptr) {
+      continue;
+    }
+    if (const u32 size = blockSize(heap, ptr); size != 0) {
+      return size;
+    }
+  }
+  return 0;
 }
 
 void OSDumpHeap(OSHeapHandle heap) {
   AllocLog.info("OSDumpHeap({})", heap);
-  if (!validHeapHandle(heap)) {
+  Heap* h = getHeap(heap);
+  if (h == nullptr) {
     AllocLog.info("--------Invalid");
     return;
   }
-
-  auto& hd = sHeapArray[heap];
-  if (OSCheckHeap(heap) < 0) {
-    AllocLog.info("--------Broken");
-    return;
-  }
-
-  AllocLog.info("addr\tsize\t\tend\t\tprev\t\tnext");
-  AllocLog.info("--------Allocated");
-  for (Cell* cell = hd.allocated; cell != nullptr; cell = cell->next) {
-    AllocLog.info("{}\t{}\t{}\t{}\t{}",
-                  reinterpret_cast<void*>(cell),
-                  cell->size,
-                  reinterpret_cast<void*>(reinterpret_cast<u8*>(cell) + cell->size),
-                  reinterpret_cast<void*>(cell->prev),
-                  reinterpret_cast<void*>(cell->next));
-  }
-
-  AllocLog.info("--------Free");
-  for (Cell* cell = hd.freeList; cell != nullptr; cell = cell->next) {
-    AllocLog.info("{}\t{}\t{}\t{}\t{}",
-                  reinterpret_cast<void*>(cell),
-                  cell->size,
-                  reinterpret_cast<void*>(reinterpret_cast<u8*>(cell) + cell->size),
-                  reinterpret_cast<void*>(cell->prev),
-                  reinterpret_cast<void*>(cell->next));
-  }
+  size_t usedBytes = 0;
+  size_t blockCount = 0;
+  heapStats(h, usedBytes, blockCount);
+  AllocLog.info("{} bytes in {} blocks", usedBytes, blockCount);
 }
 
 void OSVisitAllocated(void (*visitor)(void*, u32)) {
-  if (visitor == nullptr || sHeapArray == nullptr) {
+  if (visitor == nullptr) {
     return;
   }
-
-  for (int heap = 0; heap < sNumHeaps; ++heap) {
-    auto& hd = sHeapArray[heap];
-    if (hd.size < 0) {
-      continue;
-    }
-    for (Cell* cell = hd.allocated; cell != nullptr; cell = cell->next) {
-      visitor(reinterpret_cast<u8*>(cell) + kHeaderSize,
-              static_cast<u32>(cell->size - static_cast<s32>(kHeaderSize)));
+  std::vector<Heap*> heaps;
+  {
+    std::lock_guard lock(sHeapsMutex);
+    heaps = sHeaps;
+  }
+  for (Heap* heap : heaps) {
+    if (heap != nullptr) {
+      visitHeap(heap, visitor);
     }
   }
 }

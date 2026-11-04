@@ -11,8 +11,5 @@ void OSInit() {
 
   AlreadyInitialized = true;
 
-  AuroraOSInitMemory();
-  AuroraFillBootInfo();
   AuroraInitClock();
-  AuroraInitArena();
 }

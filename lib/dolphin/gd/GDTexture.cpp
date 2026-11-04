@@ -2,6 +2,8 @@
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/os.h>
 
+#include "gd.hpp"
+
 u8 GD2HWFiltConv[] = {0, 4, 1, 5, 2, 6};
 
 u8 GDTexMode0Ids[8] = {128, 129, 130, 131, 160, 161, 162, 163};
@@ -35,9 +37,7 @@ void GDSetTexImgPtrRaw(GXTexMapID id, u32 image_ptr_raw) {
     GDWriteBPCmd(BP_IMAGE_PTR(image_ptr_raw, GDTexImage3Ids[id]));
 }
 
-void GDPatchTexImgPtr(void* image_ptr) {
-    GDWrite_u24(OSCachedToPhysical(image_ptr) >> 5);
-}
+void GDPatchTexImgPtr(void* image_ptr) { Log.fatal("GDPatchTexImgPtr is not supported on Aurora"); }
 
 void GDSetTexCached(GXTexMapID id, u32 tmem_even, GXTexCacheSize size_even,
                     u32 tmem_odd, GXTexCacheSize size_odd) {
@@ -84,15 +84,7 @@ void GDSetTexCoordScaleAndTOEs(GXTexCoordID coord, u16 s_scale, u8 s_bias,
 }
 
 void GDLoadTlut(void* tlut_ptr, u32 tmem_addr, GXTlutSize size) {
-    ASSERTMSGLINE(488, !(tmem_addr & 0x1ff), "GDLoadTlut: invalid TMEM pointer");
-    ASSERTMSGLINE(489, size <= 0x400, "GDLoadTlut: invalid TLUT size");
-
-    GDWriteBPCmd(0xFEFFFF00);
-    GDWriteBPCmd(0xF000000);
-    GDWriteBPCmd(BP_LOAD_TLUT0(OSCachedToPhysical(tlut_ptr) >> 5, 0x64));
-    GDWriteBPCmd(BP_LOAD_TLUT1((tmem_addr - 0x80000) >> 9, size, 0x65));
-    GDWriteBPCmd(0xFEFFFF00);
-    GDWriteBPCmd(0xF000000);
+    Log.fatal("GDLoadTlut with a raw pointer is not supported on Aurora; use GDLoadTlut(const GXTlutObj*, u32)");
 }
 
 void GDLoadTlutRaw(u32 tlut_ptr_raw, u32 tmem_addr, GXTlutSize size) {

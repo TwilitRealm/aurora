@@ -268,9 +268,7 @@ void GDSetArray(GXAttr, void*, u8) { Log.fatal("GDSetArray is not supported on A
 
 void GDSetArrayRaw(GXAttr, u32, u8) { Log.fatal("GDSetArrayRaw is not supported on Aurora"); }
 
-void GDPatchArrayPtr(void* base_ptr) {
-    GDWrite_u32(OSCachedToPhysical(base_ptr));
-}
+void GDPatchArrayPtr(void* base_ptr) { Log.fatal("GDPatchArrayPtr is not supported on Aurora"); }
 
 void GDSetTexCoordGen(GXTexCoordID dst_coord, GXTexGenType func, GXTexGenSrc src_param, u8 normalize, u32 postmtx) {
     u32 form;

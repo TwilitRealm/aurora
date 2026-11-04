@@ -341,3 +341,41 @@ if (NOT TARGET nlohmann_json::nlohmann_json)
     FetchContent_MakeAvailable(nlohmann_json)
   endif ()
 endif ()
+
+if (AURORA_ENABLE_HEAP AND NOT TARGET mimalloc-static)
+  message(STATUS "aurora: Fetching mimalloc")
+  set(MI_OVERRIDE OFF CACHE BOOL "Override the standard malloc interface" FORCE)
+  set(MI_BUILD_SHARED OFF CACHE BOOL "Build shared library" FORCE)
+  set(MI_BUILD_STATIC ON CACHE BOOL "Build static library" FORCE)
+  set(MI_BUILD_OBJECT OFF CACHE BOOL "Build object library" FORCE)
+  set(MI_BUILD_TESTS OFF CACHE BOOL "Build test executables" FORCE)
+  # Debug builds keep mimalloc's padding (overflow and double free checks); release has none, so mi_expand works
+  set(MI_PADDING OFF CACHE BOOL "Enable padding to detect heap block overflow" FORCE)
+  set(MI_PROFILE OFF CACHE STRING "Enable profiling" FORCE)
+  if (NOT CMAKE_CONFIGURATION_TYPES)
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set(MI_DEBUG ON CACHE STRING "Enable assertion checks" FORCE)
+    else ()
+      set(MI_DEBUG OFF CACHE STRING "Enable assertion checks" FORCE)
+    endif ()
+  endif ()
+  if (AURORA_HEAP_ASAN)
+    set(MI_TRACK ASAN CACHE STRING "Enable tracking" FORCE)
+  else ()
+    set(MI_TRACK OFF CACHE STRING "Enable tracking" FORCE)
+  endif ()
+  # The arm64 default (-march=armv8.1-a) excludes ARMv8.0 devices
+  if (NOT APPLE)
+    set(MI_OPT_ARCH OFF CACHE STRING "Use architecture specific optimizations" FORCE)
+  endif ()
+  FetchContent_Declare(mimalloc
+    URL https://github.com/microsoft/mimalloc/archive/refs/tags/v3.6.1.tar.gz
+    URL_HASH SHA256=2672e6a99d4579fb4bb32d9de0d63aa424ce600d31fbfaf06eb74d940d2e07a6
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+    EXCLUDE_FROM_ALL
+  )
+  FetchContent_MakeAvailable(mimalloc)
+  if (NOT TARGET mimalloc-static)
+    message(FATAL_ERROR "Failed to make mimalloc available")
+  endif ()
+endif ()
