@@ -83,20 +83,8 @@ GXState::CopyTextureRef resolve_copy_texture(const GXState::CopyTextureKey& key)
   return ref;
 }
 } // namespace texture
-void evict_texture_object(u32 texObjId) noexcept {
-  for (auto& obj : g_gxState.loadedTextures) {
-    if (obj.texObjId == texObjId) {
-      obj.set_no_cache(true);
-    }
-  }
-}
-void evict_tlut_object(u32 tlutObjId) noexcept {
-  for (auto& obj : g_gxState.loadedTluts) {
-    if (obj.tlutObjId == tlutObjId) {
-      obj.set_no_cache(true);
-    }
-  }
-}
+void destroy_texture_object(u32 texObjId) noexcept {}
+void destroy_tlut_object(u32 tlutObjId) noexcept {}
 void evict_copy_texture(const void* dest) noexcept {
   g_gxState.copyTextures.erase(dest);
 }

@@ -130,6 +130,33 @@ uint64_t s_bindGeneration = 1;
 std::atomic<uint64_t> s_pendingInvalidations = 0;
 std::atomic<uint64_t> s_pendingCacheClears = 0;
 
+// Objects destroyed on any thread, evicted at the end of the frame.
+// The list head is trivially destructible, so static texture objects can still be destroyed while the process exits.
+struct PendingDestroy {
+  u32 id;
+  bool isTlut;
+  PendingDestroy* next;
+};
+std::atomic<PendingDestroy*> s_pendingDestroys = nullptr;
+
+void queue_destroy(u32 id, bool isTlut) noexcept {
+  auto* destroy = new PendingDestroy{id, isTlut, s_pendingDestroys.load(std::memory_order_relaxed)};
+  while (!s_pendingDestroys.compare_exchange_weak(destroy->next, destroy, std::memory_order_release,
+                                                  std::memory_order_relaxed)) {}
+}
+
+void apply_pending_destroys() noexcept {
+  auto* destroy = s_pendingDestroys.exchange(nullptr, std::memory_order_acquire);
+  while (destroy != nullptr) {
+    if (destroy->isTlut) {
+      evict_tlut_object(destroy->id);
+    } else {
+      evict_texture_object(destroy->id);
+    }
+    delete std::exchange(destroy, destroy->next);
+  }
+}
+
 #if DEBUG
 constexpr bool BuildSourceKeyForDebug = true;
 #else
@@ -737,6 +764,7 @@ void end_frame() noexcept {
   s_stats.publishes = streamingStats.publishes;
   s_stats.publishBytes = streamingStats.publishBytes;
   ++s_frameCount;
+  apply_pending_destroys();
   apply_pending_invalidations();
   sweep_object_caches();
   s_copyCache.end_frame();
@@ -745,6 +773,7 @@ void end_frame() noexcept {
 }
 
 void shutdown() noexcept {
+  apply_pending_destroys();
   clear_copy_texture_cache();
   s_copyCache.set_budget(gfx::RenderTextureCacheLimits.bytes);
   s_textureObjectCaches.clear();
@@ -777,8 +806,7 @@ void evict_texture_object(u32 texObjId) noexcept {
     s_textureObjectCaches.erase(it);
     clear_texture_dependency(texObjId, entry);
   }
-  // If there is a loaded slot with this ID, mark it as no_cache to avoid inserting it when it's resolved.
-  // This also handles the case where the texture was created, loaded, and immediately destroyed before we resolved it.
+  // If a loaded slot still has this ID, mark it as no_cache to avoid inserting it again when it's resolved.
   for (auto& obj : g_gxState.loadedTextures) {
     if (obj.texObjId == texObjId) {
       obj.set_no_cache(true);
@@ -804,6 +832,10 @@ void evict_tlut_object(u32 tlutObjId) noexcept {
   }
   texture::invalidate_bindings();
 }
+
+void destroy_texture_object(u32 texObjId) noexcept { queue_destroy(texObjId, false); }
+
+void destroy_tlut_object(u32 tlutObjId) noexcept { queue_destroy(tlutObjId, true); }
 
 void clear_copy_texture_cache() noexcept {
   g_gxState.copyTextures.clear();

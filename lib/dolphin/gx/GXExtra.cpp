@@ -6,8 +6,7 @@ extern "C" {
 void GXDestroyTexObj(GXTexObj* obj_) {
   auto* obj = reinterpret_cast<GXTexObj_*>(obj_);
   if (obj->texObjId != 0) {
-    GX_WRITE_AURORA(GX_AURORA_DESTROY_TEXOBJ);
-    GX_WRITE_U32(obj->texObjId);
+    aurora::gx::destroy_texture_object(obj->texObjId);
   }
   obj->texObjId = 0;
 }
@@ -15,8 +14,7 @@ void GXDestroyTexObj(GXTexObj* obj_) {
 void GXDestroyTlutObj(GXTlutObj* obj_) {
   auto* obj = reinterpret_cast<GXTlutObj_*>(obj_);
   if (obj->tlutObjId != 0) {
-    GX_WRITE_AURORA(GX_AURORA_DESTROY_TLUT);
-    GX_WRITE_U32(obj->tlutObjId);
+    aurora::gx::destroy_tlut_object(obj->tlutObjId);
   }
   obj->tlutObjId = 0;
 }

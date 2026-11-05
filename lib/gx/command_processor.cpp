@@ -727,10 +727,6 @@ void handle_aurora(ByteReader& reader) noexcept {
     gfx::begin_offscreen(width, height);
   } else if (subCmd == GX_AURORA_END_OFFSCREEN) {
     gfx::end_offscreen();
-  } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
-    evict_texture_object(reader.read<u32>());
-  } else if (subCmd == GX_AURORA_DESTROY_TLUT) {
-    evict_tlut_object(reader.read<u32>());
   } else if (subCmd == GX_AURORA_DESTROY_COPY_TEX) {
     evict_copy_texture(reinterpret_cast<const void*>(reader.read<u64>()));
   } else if (subCmd == GX_AURORA_DRAW_SIZED) {

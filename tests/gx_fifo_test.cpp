@@ -9,6 +9,7 @@
 #include "gx/regs.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -1793,100 +1794,49 @@ TEST_F(GXFifoTest, TlutExecute_ReappliesSameTargetAfterSourceChanges) {
   EXPECT_EQ(g_gxState.loadedTluts[3].loadTlut0, 0x64000022u);
 }
 
-TEST_F(GXFifoTest, DestroyTexObj_EmitsAuroraDestroyCommandAndClearsIdentity) {
+TEST_F(GXFifoTest, DestroyTexObj_ClearsIdentity) {
   alignas(32) u8 image[64]{};
   GXTexObj obj{};
   GXInitTexObj(&obj, image, 8, 8, GX_TF_RGB5A3, GX_REPEAT, GX_REPEAT, GX_FALSE);
   GXDestroyTexObj(&obj);
-  auto bytes = capture_fifo();
 
-  EXPECT_TRUE(has_aurora_cmd(bytes, GX_AURORA_DESTROY_TEXOBJ));
+  EXPECT_TRUE(capture_fifo().empty());
   EXPECT_EQ(reinterpret_cast<const GXTexObj_*>(&obj)->texObjId, 0u);
-
-  reset_gx_state();
-  decode_fifo(bytes);
 }
 
-TEST_F(GXFifoTest, DestroyTexObj_MarksLoadedSlotNoCacheUntilReloaded) {
-  alignas(32) u8 imageA[64]{};
-  alignas(32) u8 imageB[64]{};
-  GXTexObj objA{};
-  GXTexObj objB{};
+TEST_F(GXFifoTest, InitTexObj_IdsAreUniqueAcrossThreads) {
+  constexpr size_t kIdsPerThread = 1000;
+  std::array<std::vector<u32>, 4> ids;
+  std::vector<std::thread> threads;
+  for (auto& threadIds : ids) {
+    threads.emplace_back([&threadIds] {
+      for (size_t i = 0; i < kIdsPerThread; ++i) {
+        GXTexObj obj{};
+        GXInitTexObj(&obj, nullptr, 4, 4, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        threadIds.push_back(reinterpret_cast<const GXTexObj_*>(&obj)->texObjId);
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
 
-  GXInitTexObj(&objA, imageA, 8, 8, GX_TF_RGB5A3, GX_REPEAT, GX_REPEAT, GX_FALSE);
-  GXLoadTexObj(&objA, GX_TEXMAP2);
-  auto loadABytes = capture_fifo();
-  const auto destroyedTexObjId = reinterpret_cast<const GXTexObj_*>(&objA)->texObjId;
-
-  GXDestroyTexObj(&objA);
-  auto destroyBytes = capture_fifo();
-
-  GXInitTexObj(&objB, imageB, 8, 8, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
-  GXLoadTexObj(&objB, GX_TEXMAP2);
-  auto loadBBytes = capture_fifo();
-
-  reset_gx_state();
-  decode_fifo(loadABytes);
-  auto& slot = gxState().loadedTextures[GX_TEXMAP2];
-  EXPECT_EQ(slot.texObjId, destroyedTexObjId);
-  EXPECT_FALSE(slot.no_cache());
-
-  decode_fifo(destroyBytes);
-  EXPECT_EQ(slot.texObjId, destroyedTexObjId);
-  EXPECT_TRUE(slot.no_cache());
-
-  decode_fifo(loadBBytes);
-  EXPECT_EQ(slot.data, imageB);
-  EXPECT_EQ(slot.format(), GX_TF_RGB565);
-  EXPECT_FALSE(slot.no_cache());
+  std::vector<u32> allIds;
+  for (const auto& threadIds : ids) {
+    allIds.insert(allIds.end(), threadIds.begin(), threadIds.end());
+  }
+  std::sort(allIds.begin(), allIds.end());
+  EXPECT_EQ(std::adjacent_find(allIds.begin(), allIds.end()), allIds.end());
 }
 
-TEST_F(GXFifoTest, DestroyTlutObj_EmitsAuroraDestroyCommandAndClearsIdentity) {
+TEST_F(GXFifoTest, DestroyTlutObj_ClearsIdentity) {
   alignas(32) u16 palette[16]{};
   GXTlutObj obj{};
   GXInitTlutObj(&obj, palette, GX_TL_RGB565, 16);
   GXDestroyTlutObj(&obj);
-  auto bytes = capture_fifo();
 
-  EXPECT_TRUE(has_aurora_cmd(bytes, GX_AURORA_DESTROY_TLUT));
+  EXPECT_TRUE(capture_fifo().empty());
   EXPECT_EQ(reinterpret_cast<const GXTlutObj_*>(&obj)->tlutObjId, 0u);
-
-  reset_gx_state();
-  decode_fifo(bytes);
-}
-
-TEST_F(GXFifoTest, DestroyTlutObj_MarksLoadedSlotNoCacheUntilReloaded) {
-  alignas(32) u16 paletteA[16]{};
-  alignas(32) u16 paletteB[16]{};
-  GXTlutObj objA{};
-  GXTlutObj objB{};
-
-  GXInitTlutObj(&objA, paletteA, GX_TL_RGB565, 16);
-  GXLoadTlut(&objA, GX_TLUT3);
-  auto loadABytes = capture_fifo();
-  const auto destroyedTlutObjId = reinterpret_cast<const GXTlutObj_*>(&objA)->tlutObjId;
-
-  GXDestroyTlutObj(&objA);
-  auto destroyBytes = capture_fifo();
-
-  GXInitTlutObj(&objB, paletteB, GX_TL_IA8, 16);
-  GXLoadTlut(&objB, GX_TLUT3);
-  auto loadBBytes = capture_fifo();
-
-  reset_gx_state();
-  decode_fifo(loadABytes);
-  auto& slot = gxState().loadedTluts[GX_TLUT3];
-  EXPECT_EQ(slot.tlutObjId, destroyedTlutObjId);
-  EXPECT_FALSE(slot.no_cache());
-
-  decode_fifo(destroyBytes);
-  EXPECT_EQ(slot.tlutObjId, destroyedTlutObjId);
-  EXPECT_TRUE(slot.no_cache());
-
-  decode_fifo(loadBBytes);
-  EXPECT_EQ(slot.data, paletteB);
-  EXPECT_EQ(slot.format, GX_TL_IA8);
-  EXPECT_FALSE(slot.no_cache());
 }
 
 TEST_F(GXFifoTest, DestroyCopyTex_EmitsAuroraDestroyCommand) {

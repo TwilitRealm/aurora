@@ -5,6 +5,7 @@
 #include "dolphin/gx/GXAurora.h"
 
 #include <algorithm>
+#include <atomic>
 
 #include "tracy/Tracy.hpp"
 
@@ -19,21 +20,23 @@ constexpr u8 GXTexTlutIds[8] = {0x98, 0x99, 0x9A, 0x9B, 0xB8, 0xB9, 0xBA, 0xBB};
 constexpr u8 GX2HWFiltConv[6] = {0x00, 0x04, 0x01, 0x05, 0x02, 0x06};
 constexpr GXTexFilter HW2GXFiltConv[8] = {GX_NEAR, GX_NEAR_MIP_NEAR, GX_NEAR_MIP_LIN, GX_NEAR, GX_LINEAR, GX_LIN_MIP_NEAR, GX_LIN_MIP_LIN, GX_NEAR};
 
-u32 sNextTexObjId = 1;
-u32 sNextTlutObjId = 1;
+std::atomic<u32> sNextTexObjId{1};
+std::atomic<u32> sNextTlutObjId{1};
 
 u32 next_tex_obj_id() {
-  if (sNextTexObjId == 0) {
+  const u32 id = sNextTexObjId.fetch_add(1, std::memory_order_relaxed);
+  if (id == 0) {
     FATAL("texObj ID overflow");
   }
-  return sNextTexObjId++;
+  return id;
 }
 
 u32 next_tlut_obj_id() {
-  if (sNextTlutObjId == 0) {
+  const u32 id = sNextTlutObjId.fetch_add(1, std::memory_order_relaxed);
+  if (id == 0) {
     FATAL("tlutObj ID overflow");
   }
-  return sNextTlutObjId++;
+  return id;
 }
 
 int __cntlzw(unsigned int val) {

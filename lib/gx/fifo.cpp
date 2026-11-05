@@ -54,9 +54,10 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
     ProcessResult result{};
     {
       std::lock_guard lock{sBufferMutex};
-      AURORA_ASSERT(processed >= sStreamBase && target <= sStreamBase + detail::sBufferSize,
-                    "FIFO processing range [{}, {}) is outside buffered range [{}, {})", processed, target, sStreamBase,
-                    sStreamBase + detail::sBufferSize);
+      const uint64_t published = sPublished.load(std::memory_order_relaxed);
+      AURORA_ASSERT(processed >= sStreamBase && target <= published,
+                    "FIFO processing range [{}, {}) is outside published range [{}, {})", processed, target, sStreamBase,
+                    published);
       const auto start = static_cast<uint32_t>(processed - sStreamBase);
       const auto size = static_cast<uint32_t>(target - processed);
       result = process(detail::sBufferData + start, size);

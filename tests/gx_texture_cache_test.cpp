@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 namespace aurora::gx::testing {
@@ -587,6 +588,37 @@ TEST_F(GxTextureCacheTest, ContentEvictionPreservesObjectAndRecordedOwners) {
   EXPECT_FALSE(resource.expired());
   recorded.reset();
   EXPECT_TRUE(resource.expired());
+}
+
+TEST_F(GxTextureCacheTest, DestroyedTextureObjectIsEvictedAtEndOfFrame) {
+  std::array<uint8_t, 64> pixels{};
+  auto& slot = g_gxState.loadedTextures[2];
+  slot = make_texture(pixels.data(), 1, GX_TF_RGBA8_PC, 4, 4);
+  auto recorded = texture::resolve_static_texture(slot);
+  const std::weak_ptr<gfx::TextureRef> resource = recorded;
+  texture::set_content_cache_budget_for_testing(0);
+
+  std::thread{[] { destroy_texture_object(1); }}.join();
+  EXPECT_EQ(texture::resolve_static_texture(slot), recorded);
+  EXPECT_EQ(testing::texture_allocations(), 1);
+  EXPECT_FALSE(slot.no_cache());
+
+  texture::end_frame();
+  EXPECT_TRUE(slot.no_cache());
+  recorded.reset();
+  EXPECT_TRUE(resource.expired());
+}
+
+TEST_F(GxTextureCacheTest, DestroyedTlutObjectIsEvictedAtEndOfFrame) {
+  std::array<uint16_t, 16> palette{};
+  auto& slot = g_gxState.loadedTluts[3];
+  slot = make_tlut(palette.data(), 1);
+
+  std::thread{[] { destroy_tlut_object(1); }}.join();
+  EXPECT_FALSE(slot.no_cache());
+
+  texture::end_frame();
+  EXPECT_TRUE(slot.no_cache());
 }
 
 TEST_F(GxTextureCacheTest, ShutdownRestoresContentCacheBudgetAndAccounting) {
