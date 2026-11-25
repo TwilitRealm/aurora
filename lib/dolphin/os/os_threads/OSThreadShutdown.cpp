@@ -1,4 +1,5 @@
 #include "OSThreadShutdown.hpp"
+#include "OSMessage.hpp"
 
 #include <dolphin/os.h>
 
@@ -8,4 +9,7 @@ std::atomic<bool> IsShuttingDown{false};
 
 }
 
-void OSBeginShutdown(void) { aurora::os::IsShuttingDown.store(true); }
+void OSBeginShutdown(void) {
+    aurora::os::IsShuttingDown.store(true);
+    aurora::os::message::clearAllMessageQueues();
+}

@@ -1,6 +1,7 @@
 #include "dolphin/os/OSMessage.h"
 
 #include "OSThreadShutdown.hpp"
+#include "OSMessage.hpp"
 
 #include <condition_variable>
 #include <memory>
@@ -33,16 +34,6 @@ static PCMessageQueueData& GetMsgQueueData(OSMessageQueue* mq) {
         return *result.first->second;
     }
     return *it->second;
-}
-
-static void ClearMsgQueueMap() {
-    std::lock_guard<std::mutex> lock(GetMsgQueueMapMutex());
-    auto& map = GetMsgQueueMap();
-    for (auto & [_, value] : map) {
-        value->cvReceive.notify_all();
-        value->cvSend.notify_all();
-    }
-    map.clear();
 }
 
 void OSInitMessageQueue(OSMessageQueue* mq, OSMessage* msgArray, s32 msgCount) {
@@ -126,4 +117,16 @@ int OSJamMessage(OSMessageQueue* mq, void* msg, s32 flags) {
 
     data.cvReceive.notify_one();
     return 1;
+}
+
+namespace aurora::os::message {
+    void clearAllMessageQueues() {
+        std::lock_guard<std::mutex> lock(GetMsgQueueMapMutex());
+        auto& map = GetMsgQueueMap();
+        for (auto & [_, value] : map) {
+            value->cvReceive.notify_all();
+            value->cvSend.notify_all();
+        }
+        // map.clear(); // Allow for threads that haven't stopped yet to return on their own
+    }
 }
