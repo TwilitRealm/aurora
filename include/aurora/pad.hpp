@@ -102,6 +102,8 @@ struct PortPreference {
 
 enum class ConflictPolicy { Unbind, Allow };
 
+using ControllerDefaultsProvider = std::vector<binding::Binding>(*)(input::SourceId);
+
 [[nodiscard]] std::optional<ControllerIdentity> controller_identity(input::SourceId source);
 [[nodiscard]] const Profile* profile(ProfileTarget target);
 [[nodiscard]] std::vector<binding::Binding> bindings_for_control(ProfileTarget target, binding::ControlId control);
@@ -113,6 +115,8 @@ void reset_to_defaults(ProfileTarget target);
 void clear_bindings(ProfileTarget target);
 void set_default_keyboard_bindings(uint32_t port, std::vector<binding::Binding> bindings);
 void set_default_controller_bindings(std::vector<binding::Binding> bindings);
+void register_controller_defaults_provider(const char* providerName, ControllerDefaultsProvider providerFn);
+void unregister_controller_defaults_provider(const char* providerName);
 [[nodiscard]] std::vector<binding::ControlId> find_conflicts(ProfileTarget target, binding::ControlId control,
                                                              const binding::PhysicalInput& input);
 bool rebind(ProfileTarget target, binding::ControlId control, binding::Binding binding,

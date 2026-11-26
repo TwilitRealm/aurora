@@ -3,6 +3,7 @@
 #include "../../input/lifecycle.hpp"
 #include "../../input/port.hpp"
 #include "../../window.hpp"
+#include "../../gamepad.hpp"
 #include <aurora/pad.hpp>
 
 #include <SDL3/SDL_timer.h>
@@ -147,6 +148,10 @@ input::EventResult SimulatedChannelProvider::event(const InputEvent& event) {
       }
     }
   } else if (const auto* sensor = event.payload.get_if<InputEvent::SensorChanged>()) {
+    // SDL's Wiimote Driver has a bug where bad accelerometer data with the following vector gets processed. We filter it here
+    if (gamepad::is_wii(input::gamepad_for_source(event.source.id)) && sensor->values[0] == 50.21005f && sensor->values[1] == -50.21005f && sensor->values[2] == -50.21005f) {
+      return input::EventResult::Pass;
+    }
     sensors[{event.source.id, sensor->sensor}].push(event, *sensor);
   } else if (const auto* pointer = event.payload.get_if<InputEvent::PointerChanged>()) {
     using Phase = InputEvent::PointerChanged::Phase;
@@ -357,14 +362,7 @@ const Controls& controls() {
     c.cl.rightY = axis("aurora.wpad.cl.right_y");
     c.cl.triggerL = axis("aurora.wpad.cl.trigger_l");
     c.cl.triggerR = axis("aurora.wpad.cl.trigger_r");
-    std::vector<Binding> gamepad, keys;
-    auto bindButton = [&](binding::ControlId target, SDL_GamepadButton button) {
-      gamepad.push_back({.input = {.control = PhysicalInput::GamepadButton{button}}, .target = target});
-    };
-
-    auto bindAxis = [&](binding::ControlId target, SDL_GamepadAxis axis, float scale = 1.f) {
-      gamepad.push_back({.input = {.control = PhysicalInput::GamepadAxis{axis}}, .target = target, .scale = scale});
-    };
+    std::vector<Binding> keys;
 
     auto bindKey = [&](binding::ControlId target, SDL_Scancode key, float scale = 1.f) {
       keys.push_back({.input = {.control = PhysicalInput::Key{key}}, .target = target, .scale = scale});
@@ -373,47 +371,6 @@ const Controls& controls() {
     auto bindMouse = [&](binding::ControlId target, uint8_t button) {
       keys.push_back({.input = {.control = PhysicalInput::MouseButton{button}}, .target = target});
     };
-    bindButton(c.a, SDL_GAMEPAD_BUTTON_SOUTH);
-    bindButton(c.one, SDL_GAMEPAD_BUTTON_WEST);
-    bindButton(c.two, SDL_GAMEPAD_BUTTON_NORTH);
-    bindButton(c.plus, SDL_GAMEPAD_BUTTON_START);
-    bindButton(c.minus, SDL_GAMEPAD_BUTTON_BACK);
-    bindButton(c.home, SDL_GAMEPAD_BUTTON_GUIDE);
-    bindButton(c.up, SDL_GAMEPAD_BUTTON_DPAD_UP);
-    bindButton(c.down, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-    bindButton(c.left, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-    bindButton(c.right, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-    bindButton(c.recenter, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
-    bindButton(c.shake, SDL_GAMEPAD_BUTTON_EAST);
-    bindButton(c.fs.c, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    bindButton(c.fs.shake, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-    bindButton(c.cl.a, SDL_GAMEPAD_BUTTON_EAST);
-    bindButton(c.cl.b, SDL_GAMEPAD_BUTTON_SOUTH);
-    bindButton(c.cl.x, SDL_GAMEPAD_BUTTON_NORTH);
-    bindButton(c.cl.y, SDL_GAMEPAD_BUTTON_WEST);
-    bindButton(c.cl.zl, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    bindButton(c.cl.zr, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-    bindButton(c.cl.plus, SDL_GAMEPAD_BUTTON_START);
-    bindButton(c.cl.minus, SDL_GAMEPAD_BUTTON_BACK);
-    bindButton(c.cl.home, SDL_GAMEPAD_BUTTON_GUIDE);
-    bindButton(c.cl.up, SDL_GAMEPAD_BUTTON_DPAD_UP);
-    bindButton(c.cl.down, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-    bindButton(c.cl.left, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-    bindButton(c.cl.right, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-    bindAxis(c.b, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1.f);
-    bindAxis(c.fs.z, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1.f);
-    bindAxis(c.irX, SDL_GAMEPAD_AXIS_RIGHTX, 1.f);
-    bindAxis(c.irY, SDL_GAMEPAD_AXIS_RIGHTY, -1.f);
-    bindAxis(c.fs.stickX, SDL_GAMEPAD_AXIS_LEFTX, 1.f);
-    bindAxis(c.fs.stickY, SDL_GAMEPAD_AXIS_LEFTY, -1.f);
-    bindAxis(c.cl.leftX, SDL_GAMEPAD_AXIS_LEFTX, 1.f);
-    bindAxis(c.cl.leftY, SDL_GAMEPAD_AXIS_LEFTY, -1.f);
-    bindAxis(c.cl.rightX, SDL_GAMEPAD_AXIS_RIGHTX, 1.f);
-    bindAxis(c.cl.rightY, SDL_GAMEPAD_AXIS_RIGHTY, -1.f);
-    bindAxis(c.cl.l, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
-    bindAxis(c.cl.r, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
-    bindAxis(c.cl.triggerL, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1.f);
-    bindAxis(c.cl.triggerR, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1.f);
     bindKey(c.one, SDL_SCANCODE_1);
     bindKey(c.two, SDL_SCANCODE_2);
     bindKey(c.plus, SDL_SCANCODE_RETURN);
@@ -435,11 +392,91 @@ const Controls& controls() {
     bindMouse(c.a, SDL_BUTTON_LEFT);
     bindMouse(c.b, SDL_BUTTON_RIGHT);
     bindMouse(c.shake, SDL_BUTTON_MIDDLE);
-    pad::set_default_controller_bindings(std::move(gamepad));
     pad::set_default_keyboard_bindings(0, std::move(keys));
     return c;
   }();
   return c;
+}
+
+std::vector<binding::Binding> default_controller_bindings(input::SourceId sourceId) {
+  const auto& c = controls();
+
+  std::vector<binding::Binding> gamepad;
+  auto bindButton = [&](binding::ControlId target, SDL_GamepadButton button) {
+    gamepad.push_back({.input = {.control = PhysicalInput::GamepadButton{button}}, .target = target});
+  };
+  auto bindAxis = [&](binding::ControlId target, SDL_GamepadAxis axis, float scale = 1.f) {
+    gamepad.push_back({.input = {.control = PhysicalInput::GamepadAxis{axis}}, .target = target, .scale = scale});
+  };
+
+  if (gamepad::is_wii(input::gamepad_for_source(sourceId))) {
+    // Map buttons directly to what the SDL Wiimote Driver Provides
+
+    // Wiimote
+    bindButton(c.a,     SDL_GAMEPAD_BUTTON_EAST);
+    bindButton(c.b,     SDL_GAMEPAD_BUTTON_SOUTH);
+    bindButton(c.one,   SDL_GAMEPAD_BUTTON_WEST);
+    bindButton(c.two,   SDL_GAMEPAD_BUTTON_NORTH);
+    bindButton(c.plus,  SDL_GAMEPAD_BUTTON_START);
+    bindButton(c.minus, SDL_GAMEPAD_BUTTON_BACK);
+    bindButton(c.home,  SDL_GAMEPAD_BUTTON_GUIDE);
+    bindButton(c.up,    SDL_GAMEPAD_BUTTON_DPAD_UP);
+    bindButton(c.down,  SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+    bindButton(c.left,  SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+    bindButton(c.right, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+
+    // Nunchuck
+    bindButton(c.fs.c, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+    bindAxis(c.fs.z,      SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+    bindAxis(c.fs.stickX, SDL_GAMEPAD_AXIS_LEFTX);
+    bindAxis(c.fs.stickY, SDL_GAMEPAD_AXIS_LEFTY, -1.0f);
+
+    return gamepad;
+  }
+
+  bindButton(c.a, SDL_GAMEPAD_BUTTON_SOUTH);
+  bindButton(c.one, SDL_GAMEPAD_BUTTON_WEST);
+  bindButton(c.two, SDL_GAMEPAD_BUTTON_NORTH);
+  bindButton(c.plus, SDL_GAMEPAD_BUTTON_START);
+  bindButton(c.minus, SDL_GAMEPAD_BUTTON_BACK);
+  bindButton(c.home, SDL_GAMEPAD_BUTTON_GUIDE);
+  bindButton(c.up, SDL_GAMEPAD_BUTTON_DPAD_UP);
+  bindButton(c.down, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+  bindButton(c.left, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+  bindButton(c.right, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+  bindButton(c.recenter, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+  bindButton(c.shake, SDL_GAMEPAD_BUTTON_EAST);
+  bindButton(c.fs.c, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+  bindButton(c.fs.shake, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+  bindButton(c.cl.a, SDL_GAMEPAD_BUTTON_EAST);
+  bindButton(c.cl.b, SDL_GAMEPAD_BUTTON_SOUTH);
+  bindButton(c.cl.x, SDL_GAMEPAD_BUTTON_NORTH);
+  bindButton(c.cl.y, SDL_GAMEPAD_BUTTON_WEST);
+  bindButton(c.cl.zl, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+  bindButton(c.cl.zr, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+  bindButton(c.cl.plus, SDL_GAMEPAD_BUTTON_START);
+  bindButton(c.cl.minus, SDL_GAMEPAD_BUTTON_BACK);
+  bindButton(c.cl.home, SDL_GAMEPAD_BUTTON_GUIDE);
+  bindButton(c.cl.up, SDL_GAMEPAD_BUTTON_DPAD_UP);
+  bindButton(c.cl.down, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+  bindButton(c.cl.left, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+  bindButton(c.cl.right, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+  bindAxis(c.b, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1.f);
+  bindAxis(c.fs.z, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1.f);
+  bindAxis(c.irX, SDL_GAMEPAD_AXIS_RIGHTX, 1.f);
+  bindAxis(c.irY, SDL_GAMEPAD_AXIS_RIGHTY, -1.f);
+  bindAxis(c.fs.stickX, SDL_GAMEPAD_AXIS_LEFTX, 1.f);
+  bindAxis(c.fs.stickY, SDL_GAMEPAD_AXIS_LEFTY, -1.f);
+  bindAxis(c.cl.leftX, SDL_GAMEPAD_AXIS_LEFTX, 1.f);
+  bindAxis(c.cl.leftY, SDL_GAMEPAD_AXIS_LEFTY, -1.f);
+  bindAxis(c.cl.rightX, SDL_GAMEPAD_AXIS_RIGHTX, 1.f);
+  bindAxis(c.cl.rightY, SDL_GAMEPAD_AXIS_RIGHTY, -1.f);
+  bindAxis(c.cl.l, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+  bindAxis(c.cl.r, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+  bindAxis(c.cl.triggerL, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 1.f);
+  bindAxis(c.cl.triggerR, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 1.f);
+
+  return gamepad;
 }
 
 void initialize_provider() {
@@ -447,7 +484,8 @@ void initialize_provider() {
   if (simulated) {
     return;
   }
-
+  
+  pad::register_controller_defaults_provider("aurora.wpad", default_controller_bindings);
   simulated = std::make_shared<SimulatedChannelProvider>();
   layer = input::register_layer({
       .label = "aurora.wpad.sensors",
@@ -463,6 +501,7 @@ void shutdown_provider() {
 
   layer = input::kInvalidLayerId;
   simulated.reset();
+  pad::unregister_controller_defaults_provider("aurora.wpad");
   providers = {};
 }
 

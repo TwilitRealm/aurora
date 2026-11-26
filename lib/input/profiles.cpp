@@ -18,6 +18,7 @@ using binding::Binding;
 using binding::PhysicalInput;
 using Direction = PhysicalInput::GamepadAxis::Direction;
 using Json = nlohmann::json;
+using ControllerDefaultsProvider = std::vector<binding::Binding>(*)(input::SourceId);
 
 std::array<Profile, 4> keyboards;
 std::list<Profile> controllers;
@@ -25,6 +26,8 @@ std::array<PortPreference, 4> preferences{{{PortAssignment::Auto}, {}, {}, {}}};
 std::array<input::SourceId, 4> assigned{};
 std::array<std::vector<Binding>, 4> keyboardDefaults;
 std::vector<Binding> controllerDefaults;
+std::map<std::string, ControllerDefaultsProvider, std::less<>>
+    controllerDefaultsProviders;
 std::filesystem::path directory;
 std::optional<LegacyMigration> migration;
 uint64_t generation = 1;
@@ -215,17 +218,25 @@ bool valid_binding(ProfileTarget target, const Binding& b) {
              });
 }
 
+void merge_bindings(std::vector<Binding>& result, const std::vector<Binding>& bindingsToMerge) {
+  std::erase_if(result, [&](const auto& old) {
+    return std::ranges::any_of(bindingsToMerge, [&](const auto& b) { return b.target == old.target; });
+  });
+  result.insert(result.end(), bindingsToMerge.begin(), bindingsToMerge.end());
+}
+
 std::vector<Binding> defaults(ProfileTarget target) {
   if (target.kind == ProfileTarget::Kind::Keyboard) {
     return target.id < 4 ? keyboardDefaults[target.id] : std::vector<Binding>{};
   }
 
   auto result = detail::default_pad_bindings(target.id);
-  std::erase_if(result, [&](const auto& old) {
-    return std::ranges::any_of(controllerDefaults, [&](const auto& b) { return b.target == old.target; });
-  });
+  merge_bindings(result, controllerDefaults);
 
-  result.insert(result.end(), controllerDefaults.begin(), controllerDefaults.end());
+  for (const auto& [providerId, providerFn] : controllerDefaultsProviders) {
+    merge_bindings(result, providerFn(target.id));
+  }
+  
   return result;
 }
 
@@ -773,6 +784,24 @@ void set_default_controller_bindings(std::vector<Binding> bindings) {
 
   controllerDefaults.insert(controllerDefaults.end(), bindings.begin(), bindings.end());
   ++generation;
+}
+
+void register_controller_defaults_provider(const char* providerName, ControllerDefaultsProvider providerFn) {
+  if (!providerName || !providerFn) {
+    return;
+  }
+  controllerDefaultsProviders.insert_or_assign(providerName, providerFn);
+  ++generation;
+}
+
+void unregister_controller_defaults_provider(const char* providerName) {
+  if (!providerName) {
+    return;
+  }
+  
+  if (controllerDefaultsProviders.erase(providerName)) {
+    ++generation;
+  }
 }
 
 std::vector<binding::ControlId> find_conflicts(ProfileTarget target, binding::ControlId control,

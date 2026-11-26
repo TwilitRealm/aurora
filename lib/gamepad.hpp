@@ -14,6 +14,7 @@ namespace aurora::gamepad {
 struct GameController {
   SDL_Gamepad* m_controller = nullptr;
   bool m_isGameCube = false;
+  bool m_isWii = false;
   Sint32 m_index = -1;
   bool m_hasRumble = false;
   uint16_t m_vid = 0;
@@ -39,6 +40,7 @@ Sint32 player_index(Uint32 instance) noexcept;
 void set_player_index(Uint32 instance, Sint32 index) noexcept;
 std::string controller_name(Uint32 instance) noexcept;
 bool is_gamecube(Uint32 instance) noexcept;
+bool is_wii(Uint32 instance) noexcept;
 bool controller_has_rumble(Uint32 instance) noexcept;
 void controller_rumble(uint32_t instance, uint16_t low_freq_intensity, uint16_t high_freq_intensity,
                        uint16_t duration_ms) noexcept;

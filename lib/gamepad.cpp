@@ -85,6 +85,8 @@ SDL_JoystickID add_controller(SDL_JoystickID which) noexcept {
     }
 
     controller.m_isGameCube = controller.m_vid == 0x057E && controller.m_pid == 0x0337;
+    controller.m_isWii = controller.m_vid == 0x057E && (controller.m_pid == 0x0306 || controller.m_pid == 0x0330);
+    
     const auto props = SDL_GetGamepadProperties(ctrl);
     controller.m_hasRumble = SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, true);
     controller.m_hasRgbLed = SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN, false);
@@ -120,6 +122,13 @@ void remove_controller(Uint32 instance) noexcept {
 bool is_gamecube(Uint32 instance) noexcept {
   if (auto it = g_GameControllers.find(instance); it != g_GameControllers.end()) {
     return it->second.m_isGameCube;
+  }
+  return false;
+}
+
+bool is_wii(Uint32 instance) noexcept {
+  if (auto it = g_GameControllers.find(instance); it != g_GameControllers.end()) {
+    return it->second.m_isWii;
   }
   return false;
 }
@@ -176,6 +185,7 @@ uint32_t controller_count() noexcept { return g_GameControllers.size(); }
 void initialize() noexcept {
   /* Make sure we initialize everything input related now, this will automatically add all of the connected controllers
    * as expected */
+  SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
   AURORA_ASSERT(SDL_Init(SDL_INIT_HAPTIC | SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD | SDL_INIT_SENSOR),
                 "Failed to initialize SDL subsystems: {}", SDL_GetError());
 }
